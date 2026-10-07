@@ -10,6 +10,14 @@ fs.mkdirSync("test-results", { recursive: true });
   const page = await browser.newPage({
     viewport: { width: 1280, height: 800 },
   });
+  async function waitFor(predicate, arg) {
+    const deadline = Date.now() + 10000;
+    while (Date.now() < deadline) {
+      if (await page.evaluate(predicate, arg)) return;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error("Timed out waiting for browser state");
+  }
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   try {
@@ -44,12 +52,12 @@ fs.mkdirSync("test-results", { recursive: true });
     );
     await page.goBack();
     await page.waitForURL(base + "/overview");
-    await page.waitForFunction(
+    await waitFor(
       () => !document.querySelector("#settings-dialog").open,
     );
     await page.goForward();
     await page.waitForURL(base + "/settings");
-    await page.waitForFunction(
+    await waitFor(
       () => document.querySelector("#settings-dialog").open,
     );
     await page.locator("#settings-dialog [data-close]").click();
@@ -62,7 +70,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator("#repeat-start").fill("22:00");
     await page.locator("#repeat-end").fill("22:30");
     await page.locator("#recurrence-form button[type=submit]").click();
-    await page.waitForFunction(
+    await waitFor(
       () =>
         document.querySelector("#recurrence-form").hidden &&
         document
@@ -95,12 +103,12 @@ fs.mkdirSync("test-results", { recursive: true });
       "Keep this draft through navigation",
     );
     await page.locator("#day-note-form button").click();
-    await page.waitForFunction(
+    await waitFor(
       () => document.querySelector("#day-note-status").textContent === "Saved",
     );
     for (const path of ["/overview", "/recurring", "/settings"]) {
       await page.goto(base + path);
-      await page.waitForFunction(
+      await waitFor(
         (path) =>
           path === "/overview"
             ? !document.querySelector("#overview").hidden
