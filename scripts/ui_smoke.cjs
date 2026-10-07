@@ -22,6 +22,7 @@ const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (e) => errors.push(e.message));
 let dom;
 const notifications = [];
+let delayNextNote = false, delayedNote;
 
 async function fetchWithCookies(url, options = {}) {
   const target = new URL(url, base).href;
@@ -67,7 +68,14 @@ async function waitFor(check, label) {
     pretendToBeVisual: true,
     virtualConsole,
     beforeParse(window) {
-      window.fetch = fetchWithCookies;
+      window.fetch = async (url, options) => {
+        const response = await fetchWithCookies(url, options);
+        if (delayNextNote && String(url).includes("/api/notes/?")) {
+          delayNextNote = false;
+          await new Promise(resolve => { delayedNote = resolve; });
+        }
+        return response;
+      };
       window.Notification = class {
         static permission = "granted";
         static requestPermission() {
@@ -221,6 +229,17 @@ async function waitFor(check, label) {
     () => $("day-note-status").textContent === "Saved",
     "save day note",
   );
+  delayNextNote = true;
+  await w.refresh();
+  await waitFor(() => delayedNote, "hold a stale note read");
+  $("day-note").value = "Newer saved note";
+  change("day-note");
+  submit("day-note-form");
+  await waitFor(() => $("day-note-status").textContent === "Saved", "save newer note");
+  delayedNote();
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal($("day-note").value, "Newer saved note");
+  assert.equal($("day-note-status").textContent, "Saved", "Stale note read cannot overwrite a save");
   await click("block-open");
   assert.equal(
     Number($("block-start").value.split(":")[1]) % 5,
@@ -317,7 +336,7 @@ async function waitFor(check, label) {
   const note = await (
     await fetchWithCookies(`${base}/api/notes/?period=day&date=${saved.today}`)
   ).json();
-  assert.equal(note.text, `Daily reflection ${suffix}`);
+  assert.equal(note.text, "Newer saved note");
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
     "PASS: login, tasks, timer, pause/resume, freeform sand review, overrun, notification, recurring blocks, bounded calendar, and day/week/month notes.",

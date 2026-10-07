@@ -17,6 +17,7 @@ let calendarAnchor,
   expiryRefresh = 0,
   toastTimeout;
 const taskDrafts = new Map();
+const noteReads = new Map();
 let calendarWeek,
   calendarDayWidth = 208;
 const drafts = new Map(),
@@ -874,7 +875,10 @@ $("recurrence-delete").onclick = async () => {
 async function loadDayNote() {
   const day = selectedDay,
     key = `day:${day}`;
+  const version = (noteReads.get(key) || 0) + 1;
+  noteReads.set(key, version);
   const n = await api(`notes/?period=day&date=${day}`);
+  if (noteReads.get(key) !== version) return;
   savedNotes.set(key, n.text);
   if (selectedDay !== day) return;
   $("day-note").value = drafts.get(key) ?? n.text;
@@ -889,6 +893,7 @@ async function saveNote(period, day, textarea, status) {
     text = textarea.value;
   try {
     await api("notes/", { period, date: day, text });
+    noteReads.set(key, (noteReads.get(key) || 0) + 1);
     savedNotes.set(key, text);
     if (drafts.get(key) === text) drafts.delete(key);
     if (calendarData) calendarData.notes[key] = text;
