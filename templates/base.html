@@ -1,0 +1,15 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f5ef">
+  <meta name="description" content="A little structure for a thoughtful workday. Focus, make space, and see where your effort went.">
+  <title>{% block title %}Paradeis · Make room for focus{% endblock %}</title>
+  <link rel="icon" href="{% static 'icon.svg' %}" type="image/svg+xml">
+  <link rel="stylesheet" href="{% static 'app.css' %}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+{% block body %}{% endblock %}
+</body></html>

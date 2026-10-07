@@ -1,0 +1,48 @@
+# Standalone production stack: docker compose -f compose.prod.yaml up -d --build
+services:
+  app:
+    build: .
+    environment:
+      DEBUG: "0"
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      ALLOWED_HOSTS: ${DOMAIN:?Set DOMAIN in .env},localhost
+      CSRF_TRUSTED_ORIGINS: https://${DOMAIN}
+      TRUST_PROXY: "1"
+      DATABASE_PATH: /data/paradeis.sqlite3
+    volumes:
+      - paradeis-data:/data
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen(urllib.request.Request('http://localhost:8000/health/', headers={'X-Forwarded-Proto': 'https'}), timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  paradeis-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,20 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DEBUG: "1"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      DATABASE_PATH: /data/paradeis.sqlite3
+    volumes:
+      - paradeis-data:/data
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+volumes:
+  paradeis-data:
