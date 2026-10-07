@@ -246,6 +246,9 @@ select:focus {
   visibility: visible;
 }
 .workspace-page {
+  position: fixed;
+  inset: 0;
+  width: 100%;
   height: 100dvh;
   overflow: hidden;
 }
@@ -1138,4 +1141,9 @@ dialog::backdrop {
 }
 #notifications-toggle {
   margin-top: 14px;
+}
+
+@media (max-width: 720px) {
+  .task-scroll { max-height: 24dvh; flex: none; }
+  .task-scroll .task-list { max-height: none; }
 }
