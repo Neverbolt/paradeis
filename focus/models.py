@@ -146,6 +146,7 @@ class Allocation(models.Model):
     task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL)
     label = models.CharField(max_length=200)  # Snapshot keeps history meaningful after task edits.
     sand = models.PositiveSmallIntegerField(default=0)
+    automatic = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["id"]
@@ -173,3 +174,18 @@ class LoginAttempt(models.Model):
     key = models.CharField(max_length=64, primary_key=True)
     window_start = models.DateTimeField()
     count = models.PositiveIntegerField(default=0)
+
+
+class TaskFocusSpan(models.Model):
+    session = models.ForeignKey(Session, related_name="task_spans", on_delete=models.CASCADE)
+    task = models.ForeignKey(Task, null=True, on_delete=models.SET_NULL)
+    label = models.CharField(max_length=200)
+    started_at = models.DateTimeField()
+    ended_at = models.DateTimeField(null=True)
+
+    class Meta:
+        ordering = ["started_at", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["session"], condition=Q(ended_at__isnull=True),
+                                    name="one_open_task_span"),
+        ]

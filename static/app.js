@@ -750,6 +750,7 @@ function openReview(s) {
 function addAllocation(a = {}) {
   const row = el("div", "allocation-row");
   row.dataset.sand = a.sand || 0;
+  if (a.task_id) row.dataset.taskId = a.task_id;
   const input = el("input");
   input.value = a.label || "";
   input.placeholder = "Task";
@@ -791,7 +792,7 @@ function updateSand() {
   const rows = [...$("allocations").children],
     total = rows.reduce((n, r) => n + Number(r.dataset.sand), 0);
   $("allocation-total").textContent = `${total} / 5 sand`;
-  $("allocation-add").disabled = rows.length >= 10;
+  $("allocation-add").disabled = rows.length >= 200;
   for (const r of rows)
     r.querySelectorAll(".sand-control button").forEach((b, index) => {
       const value = index + 1,
@@ -812,6 +813,7 @@ $("review-form").onsubmit = async (e) => {
     {
       reflection: $("review-reflection").value,
       allocations: [...$("allocations").children].map((r) => ({
+        task_id: r.dataset.taskId ? Number(r.dataset.taskId) : null,
         label: r.querySelector("input").value,
         sand: Number(r.dataset.sand),
       })),
