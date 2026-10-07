@@ -289,7 +289,7 @@ function renderTasks() {
     row.dataset.taskId = t.id;
     if (!t.done) {
       const handle = button("⠿", "task-handle", () => {}, `Drag to reorder ${t.title}`);
-      handle.draggable = true;
+      handle.draggable = !busy && pending.length > 1;
       handle.ondragstart = e => {
         if (busy || pending.length < 2) { e.preventDefault(); return; }
         draggedTask = t.id;
@@ -377,8 +377,8 @@ function renderTasks() {
       const index = pending.findIndex(task => task.id === t.id);
       const up = button("↑", "task-up", () => moveTask(t.id, -1, ".task-up"), `Move ${t.title} up`);
       const down = button("↓", "task-down", () => moveTask(t.id, 1, ".task-down"), `Move ${t.title} down`);
-      up.disabled = index === 0;
-      down.disabled = index === pending.length - 1;
+      up.disabled = busy || index === 0;
+      down.disabled = busy || index === pending.length - 1;
       actions.append(up, down);
     }
     if (!t.done && t.id !== first?.id)
@@ -572,6 +572,12 @@ function extendable(s) {
 }
 function tick() {
   if (!state) return;
+  const taskRows = [...$("task-list").children];
+  taskRows.forEach((row, index) => {
+    row.querySelector(".task-up").disabled = busy || index === 0;
+    row.querySelector(".task-down").disabled = busy || index === taskRows.length - 1;
+    row.querySelector(".task-handle").draggable = !busy && taskRows.length > 1;
+  });
   const a = state.active,
     block =
       state.live_block && Date.parse(state.live_block.end) > now()
