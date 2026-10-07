@@ -149,6 +149,12 @@ async function waitFor(check, label) {
     () => $("completed-task-list").children.length === 0,
     "reopen task",
   );
+  await click("settings-open");
+  $("tab-title-mode").value = "completion";
+  $("tab-title-mode").dispatchEvent(new w.Event("change"));
+  assert.equal(w.localStorage.getItem("tab-title-mode"), "completion");
+  $("settings-dialog").close();
+  assert.equal(w.document.title, "Paradeis");
   await click("timer-time");
   $("duration-input").value = "10";
   submit("duration-form");
@@ -159,6 +165,7 @@ async function waitFor(check, label) {
     () => $("timer-main").textContent.includes("Pause"),
     "start timer",
   );
+  assert.equal(w.document.title, "Paradeis", "Countdown does not change the pinned tab title");
   await click("timer-main");
   await waitFor(
     () => $("timer-main").textContent.includes("Resume"),
@@ -177,11 +184,21 @@ async function waitFor(check, label) {
     "automatic completion and review",
   );
   await waitFor(() => notifications.length === 1, "completion notification");
+  assert.equal(w.document.title, "Focus complete · Paradeis");
+  await w.refresh();
+  assert.equal(w.document.title, "Focus complete · Paradeis", "Refresh retains completion title");
   await click("review-overrun");
   await waitFor(
     () => !$("review-dialog").open && $("timer-main").textContent === "Pause",
     "overrun completed session",
   );
+  assert.equal(w.document.title, "Paradeis", "Overrun clears completion alert");
+  await click("settings-open");
+  assert.equal($("tab-title-mode").value, "completion", "Title preference persists");
+  $("tab-title-mode").value = "countdown";
+  $("tab-title-mode").dispatchEvent(new w.Event("change"));
+  $("settings-dialog").close();
+  assert(w.document.title.endsWith(" · Paradeis") && w.document.title !== "Paradeis");
   await click("timer-finish");
   await waitFor(() => $("review-dialog").open, "review after finishing");
   $("review-dialog").close();

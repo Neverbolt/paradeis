@@ -18,6 +18,10 @@ let calendarAnchor,
   toastTimeout;
 const taskDrafts = new Map();
 const noteReads = new Map();
+let completionTitle = "";
+function titleMode() {
+  return localStorage.getItem("tab-title-mode") === "completion" ? "completion" : "countdown";
+}
 let calendarWeek,
   calendarDayWidth = 208;
 const drafts = new Map(),
@@ -169,6 +173,7 @@ async function refresh() {
     previous = state?.active;
   const data = await api(`state/${selectedDay ? `?date=${selectedDay}` : ""}`);
   if (version !== requestVersion) return;
+  if (data.active && data.active.id !== previous?.id) completionTitle = "";
   state = data;
   serverOffset = Date.parse(data.now) - Date.now();
   selectedDay = data.day.date;
@@ -511,7 +516,10 @@ function tick() {
     task = state.tasks.find((t) => !t.done)?.title || "";
     label = "Start";
   }
-  document.title = `${duration(seconds)} · Paradeis`;
+  const tabTitle = titleMode() === "completion"
+    ? completionTitle || "Paradeis"
+    : `${duration(seconds)} · Paradeis`;
+  if (document.title !== tabTitle) document.title = tabTitle;
   $("timer-time").textContent = duration(seconds);
   $("timer-mode").textContent = mode;
   $("timer-task").textContent = task;
@@ -1154,6 +1162,7 @@ $("task-form").onsubmit = async (e) => {
     $("task-title").value = "";
 };
 function openSettings() {
+  $("tab-title-mode").value = titleMode();
   for (const [key, value] of Object.entries(state.preferences))
     if ($(key)) $(key).value = value;
   updateNotifications();
@@ -1229,6 +1238,11 @@ async function applyRoute() {
   else await showView(false, false);
 }
 window.addEventListener("popstate", () => applyRoute().catch(showError));
+$("tab-title-mode").value = titleMode();
+$("tab-title-mode").onchange = () => {
+  localStorage.setItem("tab-title-mode", $("tab-title-mode").value);
+  tick();
+};
 let worker;
 let deadlineTimeout;
 if ("serviceWorker" in navigator)
@@ -1293,6 +1307,10 @@ async function notifyEnd(s) {
   localStorage.setItem(key, "yes");
   const title = s.kind === "meeting" ? "Meeting complete" : "Focus complete",
     options = { body: s.title, tag: key, icon: "/static/icon.svg" };
+  if (titleMode() === "completion") {
+    completionTitle = `${title} · Paradeis`;
+    document.title = completionTitle;
+  }
   try {
     const registration = worker ? await worker : null;
     if (registration) await registration.showNotification(title, options);
