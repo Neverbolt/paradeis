@@ -99,6 +99,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator("#review-reflection").fill("Next steps agreed");
     await page.locator('#review-form button[type="submit"]').click();
     await page.waitForSelector("#review-dialog[open]", { state: "hidden" });
+    await page.waitForSelector("#timeline .item-note");
     assert(
       await page.locator("#timeline .item-note").count(),
       "Meeting note appears inline",
