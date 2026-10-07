@@ -16,6 +16,9 @@ let calendarAnchor,
   loadingCalendar = false,
   expiryRefresh = 0,
   toastTimeout;
+const taskDrafts = new Map();
+let calendarWeek,
+  calendarDayWidth = 208;
 const drafts = new Map(),
   savedNotes = new Map(),
   notified = new Set();
@@ -193,20 +196,65 @@ function renderDay() {
   renderTasks();
   const pending = state.pending[0];
   $("review-prompt").hidden = !pending;
-  if (pending)
-    $("review-prompt").replaceChildren(
-      el("span", "", `${state.pending.length} to review`),
-      button("Review", "", () => openReview(pending)),
+  if (pending) {
+    const card = timelineCard({ ...pending, type: "session" });
+    card.classList.add("pending-review");
+    card.prepend(
+      el(
+        "span",
+        "review-context small",
+        `Review · ${dateLabel(pending.date, { weekday: "short" })} ${clock(pending.start)}${state.pending.length > 1 ? ` · +${state.pending.length - 1}` : ""}`,
+      ),
     );
+    $("review-prompt").replaceChildren(card);
+  }
   loadDayNote().catch(showError);
 }
 function renderTasks() {
   $("task-count").textContent = state.tasks.filter((t) => !t.done).length;
   const list = $("task-list");
+  // A server refresh must not replace the input being edited.
+  if (list.contains(document.activeElement)) return;
   list.replaceChildren();
   const first = state.tasks.find((t) => !t.done);
   for (const t of state.tasks) {
     const row = el("div", `task-row${t.done ? " completed" : ""}`);
+    const input = el("input", "task-title");
+    input.value = taskDrafts.get(t.id) ?? t.title;
+    input.maxLength = 200;
+    input.setAttribute("aria-label", "Task name");
+    input.dataset.taskId = t.id;
+    input.oninput = () => taskDrafts.set(t.id, input.value);
+    input.onblur = async () => {
+      const title = input.value.trim();
+      if (!title) {
+        input.value = t.title;
+        taskDrafts.delete(t.id);
+        return;
+      }
+      if (title === t.title) {
+        taskDrafts.delete(t.id);
+        return;
+      }
+      try {
+        await api(`tasks/${t.id}/`, { action: "rename", title });
+        if (taskDrafts.get(t.id)?.trim() === title) taskDrafts.delete(t.id);
+        await refresh();
+      } catch (error) {
+        showError(error);
+      }
+    };
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        input.blur();
+      }
+      if (e.key === "Escape") {
+        input.value = t.title;
+        taskDrafts.delete(t.id);
+        input.blur();
+      }
+    };
     row.append(
       button(
         t.done ? "✓" : "",
@@ -214,7 +262,7 @@ function renderTasks() {
         () => mutate(`tasks/${t.id}/`, { action: "toggle" }),
         `${t.done ? "Reopen" : "Complete"} ${t.title}`,
       ),
-      el("span", "task-title", t.title),
+      input,
     );
     const actions = el("div", "task-actions");
     if (!t.done && t.id !== first?.id)
@@ -228,19 +276,12 @@ function renderTasks() {
       );
     actions.append(
       button(
-        "✎",
-        "",
-        () => {
-          const title = window.prompt("Task", t.title);
-          if (title?.trim())
-            mutate(`tasks/${t.id}/`, { action: "rename", title });
-        },
-        "Rename task",
-      ),
-      button(
         "×",
         "",
-        () => mutate(`tasks/${t.id}/`, { action: "archive" }),
+        () => {
+          taskDrafts.delete(t.id);
+          mutate(`tasks/${t.id}/`, { action: "archive" });
+        },
         "Archive task",
       ),
     );
@@ -258,12 +299,85 @@ function entries(day) {
     ...day.plan.map((p) => ({ ...p, type: "plan", title: "Focus" })),
   ].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
+function timelineCard(item) {
+  const pastMeeting =
+    item.type === "block" &&
+    item.kind === "meeting" &&
+    Date.parse(item.end) <= now();
+  const cls = `timeline-item${item.type === "plan" ? " planned" : item.type === "block" ? ` reserved ${item.kind}` : item.status !== "completed" ? " running" : ""}`;
+  const card =
+    item.type === "block"
+      ? button(
+          "",
+          cls,
+          () => (pastMeeting ? reviewMeeting(item) : openBlock(item)),
+          `${pastMeeting ? "Review" : "Edit"} ${item.title}`,
+        )
+      : item.status === "completed"
+        ? button("", cls, () => openReview(item), `Review ${item.title}`)
+        : el("div", cls);
+  card.append(el("p", "", item.title));
+  if (item.allocations?.length > 1) {
+    const chips = el("div", "allocation-chips");
+    for (const a of item.allocations) {
+      const chip = el("span", "allocation-chip", a.label);
+      chip.append(sand(a.sand));
+      chips.append(chip);
+    }
+    card.append(chips);
+  }
+  const meta = el("div", "item-meta"),
+    details = el("span", "item-details");
+  details.append(
+    el(
+      "span",
+      "",
+      item.type === "session"
+        ? item.status === "completed"
+          ? `${duration(item.elapsed)}${item.kind === "meeting" ? " · meeting" : ""}`
+          : item.status === "paused"
+            ? "Paused"
+            : "Running"
+        : `${duration((Date.parse(item.end) - Date.parse(item.start)) / 1000)}${item.type === "block" ? ` · ${item.kind}${item.template_id ? " ↻" : ""}` : ""}`,
+    ),
+  );
+  if (item.reflection)
+    details.append(el("span", "item-note", ` · ${item.reflection}`));
+  meta.append(details);
+  if (item.status === "completed") meta.append(sand(item.effort));
+  card.append(meta);
+  return card;
+}
 function renderTimeline(container, day) {
+  const previousScroll = container.scrollTop;
   container.replaceChildren();
-  for (const item of entries(day)) {
-    const row = el("div", "timeline-row");
+  const all = entries(day);
+  const current =
+    day.date === state.today
+      ? all.find(
+          (item) => item.id === state.active?.id && item.type === "session",
+        ) ||
+        all.find(
+          (item) =>
+            Date.parse(item.start) <= now() && Date.parse(item.end) > now(),
+        ) ||
+        all.find((item) => Date.parse(item.start) >= now()) ||
+        all.at(-1)
+      : null;
+  for (const item of all) {
+    if (
+      container.id !== "timeline" &&
+      item.type === "plan" &&
+      item.kind === "break"
+    )
+      continue;
+    const row = el(
+      "div",
+      `timeline-row${item === current ? " current-time" : ""}`,
+    );
+    row.dataset.start = item.start;
     row.append(el("span", "timeline-time", clock(item.start)));
-    if (item.type === "plan" && item.kind === "break") {
+    if (item.type === "plan" && item.kind === "break")
       row.append(
         el(
           "div",
@@ -271,47 +385,40 @@ function renderTimeline(container, day) {
           `Break · ${duration((Date.parse(item.end) - Date.parse(item.start)) / 1000)}`,
         ),
       );
-    } else {
-      const cls = `timeline-item${item.type === "plan" ? " planned" : item.type === "block" ? ` reserved ${item.kind}` : item.status !== "completed" ? " running" : ""}`;
-      const card =
-        item.type === "block"
-          ? button("", cls, () => openBlock(item), `Edit ${item.title}`)
-          : item.status === "completed"
-            ? button("", cls, () => openReview(item), `Review ${item.title}`)
-            : el("div", cls);
-      card.append(el("p", "", item.title));
-      if (item.allocations?.length > 1) {
-        const chips = el("div", "allocation-chips");
-        for (const a of item.allocations) {
-          const chip = el("span", "allocation-chip", a.label);
-          chip.append(sand(a.sand));
-          chips.append(chip);
-        }
-        card.append(chips);
-      }
-      const meta = el("div", "item-meta");
-      meta.append(
-        el(
-          "span",
-          "",
-          item.type === "session"
-            ? item.status === "completed"
-              ? `${duration(item.elapsed)}${item.kind === "meeting" ? " · meeting" : ""}`
-              : item.status === "paused"
-                ? "Paused"
-                : "Running"
-            : `${duration((Date.parse(item.end) - Date.parse(item.start)) / 1000)}${item.type === "block" ? ` · ${item.kind}${item.template_id ? " ↻" : ""}` : ""}`,
-        ),
-      );
-      if (item.status === "completed") meta.append(sand(item.effort));
-      card.append(meta);
-      if (item.reflection) card.title = item.reflection;
-      row.append(card);
-    }
+    else row.append(timelineCard(item));
     container.append(row);
   }
   if (!container.childElementCount)
     container.append(el("p", "timeline-empty", "No sessions"));
+  container.scrollTop = previousScroll;
+  if (container.id === "timeline" && !overviewVisible && current)
+    requestAnimationFrame(() => followCurrentTime(container));
+}
+function followCurrentTime(container) {
+  const row = container.querySelector(".current-time");
+  if (!row || !container.clientHeight) return;
+  const box = row.getBoundingClientRect(),
+    parent = container.getBoundingClientRect();
+  if (box.top < parent.top + 10 || box.bottom > parent.bottom - 10)
+    container.scrollTop += box.top - parent.top - 12;
+}
+async function reviewMeeting(block) {
+  if (busy) return;
+  busy = true;
+  try {
+    const data = await api("timer/", {
+      action: "record_meeting",
+      block_id: block.id,
+    });
+    await refresh();
+    if (overviewVisible) await loadCalendar({ preserve: true });
+    openReview(data.session);
+  } catch (error) {
+    showError(error);
+  } finally {
+    busy = false;
+    tick();
+  }
 }
 function remaining(s) {
   return s.status === "running"
@@ -794,10 +901,11 @@ $("day-prev").onclick = () => changeDay(shiftDay(selectedDay, -1));
 $("day-next").onclick = () => changeDay(shiftDay(selectedDay, 1));
 $("go-today").onclick = () => changeDay(state.today);
 function stride() {
-  const style = getComputedStyle(document.documentElement);
   return (
-    parseFloat(style.getPropertyValue("--day-width")) +
-    parseFloat(style.getPropertyValue("--day-gap"))
+    calendarDayWidth +
+    (parseFloat(
+      getComputedStyle($("calendar-scroll")).getPropertyValue("--day-gap"),
+    ) || 8)
   );
 }
 async function loadCalendar({ target, preserve = false } = {}) {
@@ -818,12 +926,15 @@ async function loadCalendar({ target, preserve = false } = {}) {
       const delta = (Date.parse(first) - Date.parse(oldStart)) / 86400000;
       $("calendar-scroll").scrollLeft = oldScroll - delta * stride();
     } else {
-      const date = target || calendarAnchor,
+      const date = monday(target || calendarWeek || calendarAnchor),
         index = data.days.findIndex((d) => d.date === date);
       $("calendar-scroll").scrollLeft = Math.max(0, index) * stride();
     }
   } finally {
-    if (version === historyVersion) loadingCalendar = false;
+    if (version === historyVersion) {
+      loadingCalendar = false;
+      updateCalendarWeek();
+    }
   }
 }
 function renderCalendar() {
@@ -831,13 +942,6 @@ function renderCalendar() {
     days = calendarData.days;
   grid.replaceChildren();
   grid.style.gridTemplateColumns = `repeat(${days.length}, var(--day-width))`;
-  $("calendar-label").textContent = dateLabel(calendarAnchor, {
-    month: "long",
-    year: "numeric",
-  });
-  $("calendar-total").textContent = stats(
-    calendarData.period_summaries[`month:${calendarAnchor}`],
-  );
   days.forEach((day, index) => {
     const card = el(
       "article",
@@ -901,16 +1005,42 @@ function addPeriod(period, day, index, length, title) {
   );
   $("calendar-grid").append(group);
 }
-function resizeEditors() {
-  $("calendar-scroll").style.setProperty(
-    "--editor-width",
-    `${Math.max(160, $("calendar-scroll").clientWidth - 2)}px`,
+function updateCalendarWeek() {
+  if (!calendarData) return;
+  const index = Math.max(
+    0,
+    Math.min(
+      calendarData.days.length - 7,
+      Math.round($("calendar-scroll").scrollLeft / (stride() * 7)) * 7,
+    ),
   );
+  calendarWeek = calendarData.days[index].date;
+  $("calendar-label").textContent =
+    `${dateLabel(calendarWeek, { month: "short", day: "numeric" })} – ${dateLabel(shiftDay(calendarWeek, 6), { month: "short", day: "numeric", year: "numeric" })}`;
+  $("calendar-total").textContent = stats(
+    calendarData.period_summaries[`week:${calendarWeek}`],
+  );
+}
+function resizeEditors() {
+  const scroll = $("calendar-scroll"),
+    width = scroll.clientWidth;
+  if (!width) return;
+  const oldStride = stride(),
+    weekIndex = Math.round(scroll.scrollLeft / (oldStride * 7));
+  const gap =
+    parseFloat(getComputedStyle(scroll).getPropertyValue("--day-gap")) || 8;
+  calendarDayWidth = (width - gap * 6) / 7;
+  scroll.style.setProperty("--day-width", `${calendarDayWidth}px`);
+  scroll.style.setProperty("--editor-width", `${width - 2}px`);
+  scroll.scrollLeft = weekIndex * stride() * 7;
+  updateCalendarWeek();
 }
 if (window.ResizeObserver)
   new ResizeObserver(resizeEditors).observe($("calendar-scroll"));
+window.addEventListener("resize", resizeEditors);
 $("calendar-scroll").onscroll = () => {
   if (loadingCalendar || !overviewVisible || !calendarData) return;
+  updateCalendarWeek();
   const scroll = $("calendar-scroll"),
     edge = stride() * 3;
   if (scroll.scrollLeft < edge) {
@@ -924,14 +1054,19 @@ $("calendar-scroll").onscroll = () => {
     loadCalendar({ preserve: true }).catch(showError);
   }
 };
-$("month-prev").onclick = () => {
-  calendarAnchor = month(calendarAnchor, -1);
-  loadCalendar().catch(showError);
-};
-$("month-next").onclick = () => {
-  calendarAnchor = month(calendarAnchor, 1);
-  loadCalendar().catch(showError);
-};
+async function navigateCalendarWeek(offset) {
+  const target = shiftDay(calendarWeek || monday(state.today), offset * 7);
+  const index = calendarData?.days.findIndex((d) => d.date === target) ?? -1;
+  if (index >= 0 && index <= calendarData.days.length - 7) {
+    $("calendar-scroll").scrollLeft = index * stride();
+    updateCalendarWeek();
+  } else {
+    calendarAnchor = month(target);
+    await loadCalendar({ target });
+  }
+}
+$("month-prev").onclick = () => navigateCalendarWeek(-1).catch(showError);
+$("month-next").onclick = () => navigateCalendarWeek(1).catch(showError);
 $("calendar-today").onclick = () => {
   calendarAnchor = month(state.today);
   loadCalendar({ target: state.today }).catch(showError);
@@ -1034,7 +1169,7 @@ async function notifyEnd(s) {
   }
 }
 window.addEventListener("beforeunload", (e) => {
-  if (drafts.size) {
+  if (drafts.size || taskDrafts.size) {
     e.preventDefault();
     e.returnValue = "";
   }

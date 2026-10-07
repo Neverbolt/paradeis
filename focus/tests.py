@@ -648,6 +648,54 @@ class AppTests(TestCase):
             404,
         )
 
+    def test_past_meeting_results_without_starting_timer(self):
+        b = self.block(start=time(8), end=time(8, 30))
+        response = self.post("/api/timer/", {"action": "record_meeting", "block_id": b.id})
+        self.assertEqual(response.status_code, 200, response.content)
+        session = Session.objects.get(pk=response.json()["session"]["id"])
+        self.assertEqual(session.elapsed_seconds, 1800)
+        self.assertEqual(session.kind, "meeting")
+        self.assertEqual(
+            self.post(
+                f"/api/sessions/{session.id}/review/",
+                {
+                    "reflection": "Decision made",
+                    "allocations": [
+                        {"label": "Design review", "sand": 3},
+                        {"label": "Actions", "sand": 2},
+                    ],
+                },
+            ).status_code,
+            200,
+        )
+        self.post("/api/timer/", {"action": "record_meeting", "block_id": b.id})
+        self.assertEqual(Session.objects.filter(block=b).count(), 1)
+        data = self.client.get("/api/state/").json()["day"]
+        self.assertEqual(data["summary"]["effort"], 5)
+        self.assertEqual(data["sessions"][0]["reflection"], "Decision made")
+
+    def test_meeting_results_reject_future_breaks_and_foreign_blocks(self):
+        future = self.block()
+        self.assertEqual(
+            self.post(
+                "/api/timer/", {"action": "record_meeting", "block_id": future.id}
+            ).status_code,
+            409,
+        )
+        rest = self.block(kind="break", start=time(8), end=time(8, 30))
+        self.assertEqual(
+            self.post("/api/timer/", {"action": "record_meeting", "block_id": rest.id}).status_code,
+            404,
+        )
+        foreign = self.block(user=self.other, start=time(8), end=time(8, 30))
+        self.assertEqual(
+            self.post(
+                "/api/timer/", {"action": "record_meeting", "block_id": foreign.id}
+            ).status_code,
+            404,
+        )
+        self.assertEqual(Session.objects.count(), 0)
+
 
 class EffortMigrationTests(TransactionTestCase):
     def test_existing_split_reviews_keep_total_sand_and_labels(self):

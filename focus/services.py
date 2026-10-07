@@ -141,6 +141,51 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False):
     return session
 
 
+def record_meeting(user, prefs, now, block_id):
+    """Explicitly record a past reservation when its timer was not started."""
+    block = Block.objects.get(user=user, pk=block_id, kind="meeting", deleted=False)
+    existing = block.session_set.exclude(status="cancelled").first()
+    if existing:
+        if existing.status != "completed":
+            raise Conflict("Finish the meeting timer before reviewing it.")
+        return existing
+    start, end = block_bounds(block, prefs)
+    if end > now:
+        raise Conflict("Record results after the meeting ends.")
+    for other in Session.objects.filter(user=user, started_at__lt=end).exclude(status="cancelled"):
+        other_end = other.ended_at or (
+            now + timedelta(seconds=other.remaining_seconds)
+            if other.status == "paused"
+            else other.deadline
+        )
+        if other_end > start:
+            raise Conflict("This meeting overlaps recorded work.")
+    seconds = int((end - start).total_seconds())
+    session = Session.objects.create(
+        user=user,
+        block=block,
+        date=block.date,
+        kind="meeting",
+        title=block.title,
+        started_at=start,
+        resumed_at=start,
+        deadline=end,
+        ended_at=end,
+        planned_seconds=seconds,
+        remaining_seconds=0,
+        elapsed_seconds=seconds,
+        status="completed",
+    )
+    count = Session.objects.filter(user=user, date=block.date, status="completed").count()
+    minutes = prefs.long_break if count % prefs.long_every == 0 else prefs.short_break
+    session.break_until = end + timedelta(minutes=minutes)
+    session.save(update_fields=["break_until"])
+    block.fixed = True
+    block.save(update_fields=["fixed"])
+    Allocation.objects.create(session=session, label=block.title)
+    return session
+
+
 def resize_session(session, user, prefs, now, seconds, overrun=False):
     """Edit remaining time without losing worked time; reopen a natural completion."""
     if session.status == "completed":

@@ -23,8 +23,19 @@ jobs:
       - run: node --check static/app.js
       - name: Test UI interactions against a disposable local server
         run: |
-          npm install --no-save --package-lock=false jsdom@26
+          npm install --no-save --package-lock=false jsdom@26 playwright@1.51.1
           python scripts/run_ui_smoke.py
+      - name: Check browser layout and meeting results
+        run: |
+          npx playwright install --with-deps chromium
+          python scripts/run_ui_smoke.py --browser
+      - name: Save browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-screenshots
+          path: test-results/*.png
+          if-no-files-found: ignore
       - name: Check production configuration
         env:
           DEBUG: "0"
