@@ -21,6 +21,104 @@ fs.mkdirSync("test-results", { recursive: true });
       page.getByRole("button", { name: "Sign in" }).click(),
     ]);
     await page.waitForSelector(".current-time");
+    await page.locator("#task-title").fill("Browser task");
+    await page.locator("#task-form button").click();
+    await page.waitForSelector("#task-list .task-check");
+    await page.locator("#task-list .task-check").click();
+    await page.waitForSelector("#completed-task-list .checked");
+    assert.equal(await page.locator("#task-list .task-row").count(), 0);
+    await page.locator("#completed-task-list .task-check").click();
+    await page.waitForSelector("#task-list .task-check");
+    assert.equal(
+      await page.locator("#completed-task-list .task-row").count(),
+      0,
+    );
+    await page.locator("#overview-view").click();
+    await page.waitForURL(base + "/overview");
+    await page.waitForSelector(".calendar-day");
+    await page.locator("#settings-open").click();
+    await page.waitForURL(base + "/settings");
+    assert.equal(
+      await page.locator("#settings-dialog #notifications-toggle").count(),
+      1,
+    );
+    await page.goBack();
+    await page.waitForURL(base + "/overview");
+    await page.waitForFunction(
+      () => !document.querySelector("#settings-dialog").open,
+    );
+    await page.goForward();
+    await page.waitForURL(base + "/settings");
+    await page.waitForFunction(
+      () => document.querySelector("#settings-dialog").open,
+    );
+    await page.locator("#settings-dialog [data-close]").click();
+    await page.waitForURL(base + "/overview");
+    await page.locator("#recurrences-open").click();
+    await page.waitForURL(base + "/recurring");
+    await page.locator("#recurrence-add").click();
+    await page.locator("#repeat-title").fill("Browser daily");
+    await page.locator("#repeat-frequency").selectOption("daily");
+    await page.locator("#repeat-start").fill("22:00");
+    await page.locator("#repeat-end").fill("22:30");
+    await page.locator("#recurrence-form button[type=submit]").click();
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#recurrence-form").hidden &&
+        document
+          .querySelector("#recurrence-list")
+          .textContent.includes("Browser daily"),
+    );
+    await page.locator("#recurrence-list button").click();
+    await page.locator("#recurrences-dialog [data-close]").click();
+    assert(await page.locator("#recurrences-dialog").evaluate((d) => d.open));
+    assert.equal(new URL(page.url()).pathname, "/recurring");
+    await page.locator("#recurrences-dialog [data-close]").click();
+    await page.waitForURL(base + "/overview");
+    await page.locator("#home-link").click();
+    await page.waitForURL(base + "/");
+    await page.locator("#day-note").fill("Keep this draft through navigation");
+    await page.locator("#overview-view").click();
+    await page.waitForSelector(".calendar-day");
+    await page.evaluate(() => {
+      window.spaSentinel = "alive";
+    });
+    await page.locator("#home-link").click();
+    await page.waitForURL(base + "/");
+    assert.equal(
+      await page.evaluate(() => window.spaSentinel),
+      "alive",
+      "Logo stays within the app",
+    );
+    assert.equal(
+      await page.locator("#day-note").inputValue(),
+      "Keep this draft through navigation",
+    );
+    await page.locator("#day-note-form button").click();
+    await page.waitForFunction(
+      () => document.querySelector("#day-note-status").textContent === "Saved",
+    );
+    for (const path of ["/overview", "/recurring", "/settings"]) {
+      await page.goto(base + path);
+      await page.waitForFunction(
+        (path) =>
+          path === "/overview"
+            ? !document.querySelector("#overview").hidden
+            : document.querySelector(
+                path === "/recurring"
+                  ? "#recurrences-dialog"
+                  : "#settings-dialog",
+              ).open,
+        path,
+      );
+      assert.equal(
+        new URL(page.url()).pathname,
+        path,
+        "Deep links load their view",
+      );
+    }
+    await page.locator("#settings-dialog [data-close]").click();
+    await page.waitForURL(base + "/");
     const post = (path, data) =>
       page.evaluate(
         async ({ path, data }) => {

@@ -490,6 +490,106 @@ class AppTests(TestCase):
         data["repeat"]["interval_weeks"] = 2
         self.assertEqual(self.post("/api/blocks/", data).status_code, 200)
 
+    def daily_schedule(self, **changes):
+        data = dict(
+            title="Daily call",
+            kind="meeting",
+            start="14:00",
+            end="14:30",
+            frequency="daily",
+            weekday=2,
+            interval_weeks=1,
+            anchor_date="2026-10-08",
+        )
+        data.update(changes)
+        response = self.post("/api/recurrences/", data)
+        self.assertEqual(response.status_code, 200, response.content)
+        from .models import BlockTemplate
+
+        return BlockTemplate.objects.get(id=response.json()["templates"][-1]["id"])
+
+    def test_daily_creation_and_exceptions_do_not_suppress_neighbouring_days(self):
+        t = self.daily_schedule()
+        self.client.get("/api/history/?start=2026-10-08&end=2026-10-14")
+        self.assertEqual(Block.objects.filter(template=t).count(), 7)
+        deleted = Block.objects.get(template=t, date="2026-10-09")
+        edited = Block.objects.get(template=t, date="2026-10-10")
+        self.post(f"/api/blocks/{deleted.id}/", {"action": "delete"})
+        self.post(
+            f"/api/blocks/{edited.id}/",
+            dict(title="Exception", kind="meeting", date="2026-10-10", start="16:00", end="16:30"),
+        )
+        self.edit_template(t, frequency="daily")
+        days = self.client.get("/api/history/?start=2026-10-08&end=2026-10-14").json()["days"]
+        self.assertEqual(
+            [d["date"] for d in days if d["blocks"]],
+            ["2026-10-08", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14"],
+        )
+        self.assertEqual(days[2]["blocks"][0]["title"], "Exception")
+        self.assertEqual(days[3]["blocks"][0]["start_time"], "15:00")
+        # Started days freeze before later schedule edits.
+        with patch("focus.views.timezone.now", return_value=NOW + timedelta(days=5)):
+            self.client.get("/api/state/")
+            self.edit_template(t, frequency="daily", start="17:00", end="17:30")
+        self.assertEqual(Block.objects.get(template=t, date="2026-10-12").start, time(15))
+
+    def test_daily_collisions_with_weekly_patterns_in_both_directions(self):
+        self.recurring()
+        response = self.post(
+            "/api/recurrences/",
+            dict(
+                title="Daily",
+                kind="meeting",
+                start="14:15",
+                end="15:00",
+                frequency="daily",
+                weekday=0,
+                interval_weeks=1,
+                anchor_date="2026-10-08",
+            ),
+        )
+        self.assertEqual(response.status_code, 409)
+        t = self.daily_schedule(start="16:00", end="16:30")
+        response = self.post(
+            "/api/recurrences/",
+            dict(
+                title="Weekly",
+                kind="meeting",
+                start="16:15",
+                end="17:00",
+                frequency="weekly",
+                weekday=0,
+                interval_weeks=2,
+                anchor_date="2026-10-08",
+            ),
+        )
+        self.assertEqual(response.status_code, 409)
+        self.client.force_login(self.other)
+        self.assertEqual(
+            self.post(f"/api/recurrences/{t.id}/", {"action": "delete"}).status_code, 404
+        )
+
+    def test_daily_repeat_from_block_and_route_reload(self):
+        response = self.post(
+            "/api/blocks/",
+            dict(
+                title="Daily",
+                kind="break",
+                date="2026-10-08",
+                start="12:00",
+                end="12:30",
+                repeat={"frequency": "daily", "interval_weeks": 1},
+            ),
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        days = self.client.get("/api/history/?start=2026-10-08&end=2026-10-10").json()["days"]
+        self.assertEqual([len(d["blocks"]) for d in days], [1, 1, 1])
+        for path in ["/overview", "/settings", "/recurring"]:
+            self.assertEqual(self.client.get(path).status_code, 200)
+            self.client.logout()
+            self.assertEqual(self.client.get(path).status_code, 302)
+            self.client.force_login(self.user)
+
     def test_recurrences_are_user_scoped(self):
         t = self.recurring()
         self.client.force_login(self.other)

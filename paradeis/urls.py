@@ -5,6 +5,9 @@ from focus import views
 
 urlpatterns = [
     path("", views.home, name="home"),
+    path("overview", views.home, name="overview"),
+    path("recurring", views.home, name="recurring"),
+    path("settings", views.home, name="settings"),
     path("login/", views.ThrottledLoginView.as_view(), name="login"),
     path("logout/", auth.LogoutView.as_view(), name="logout"),
     path(

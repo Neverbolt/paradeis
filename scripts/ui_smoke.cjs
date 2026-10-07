@@ -86,7 +86,9 @@ async function waitFor(check, label) {
         this.open = true;
       };
       window.HTMLDialogElement.prototype.close = function () {
+        if (!this.open) return;
         this.open = false;
+        this.dispatchEvent(new window.Event("close"));
       };
     },
   });
@@ -122,6 +124,23 @@ async function waitFor(check, label) {
     "inline task rename",
   );
 
+  const check = $("task-list").querySelector(".task-check");
+  check.focus();
+  check.click();
+  await waitFor(
+    () => $("completed-task-list").children.length === 1,
+    "focused task completion",
+  );
+  assert.equal($("task-list").children.length, 1);
+  assert(
+    $("task-form").compareDocumentPosition($("completed-task-list")) &
+      w.Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  $("completed-task-list").querySelector(".task-check").click();
+  await waitFor(
+    () => $("completed-task-list").children.length === 0,
+    "reopen task",
+  );
   await click("timer-time");
   $("duration-input").value = "10";
   submit("duration-form");
@@ -183,7 +202,10 @@ async function waitFor(check, label) {
   submit("review-form");
   await waitFor(() => !$("review-dialog").open, "save review");
   await waitFor(
-    () => $("day-summary").textContent.includes("4 sand"),
+    () =>
+      $("day-summary")
+        .querySelector(".sand-total")
+        ?.getAttribute("aria-label") === "4 sand",
     "effort summary",
   );
   assert.equal(notifications.length, 1, "Notification deduplicated");
@@ -219,12 +241,32 @@ async function waitFor(check, label) {
   await click("recurrences-open");
   await waitFor(() => $("recurrences-dialog").open, "recurring blocks");
   assert($("recurrence-list").textContent.includes(`Lunch ${suffix}`));
+  assert.equal(w.location.pathname, "/recurring");
+  await click("recurrence-add");
+  $("repeat-title").value = `Daily ${suffix}`;
+  $("repeat-frequency").value = "daily";
+  $("repeat-frequency").dispatchEvent(new w.Event("change"));
+  assert($("repeat-weekly").hidden);
+  $("repeat-start").value = "18:00";
+  $("repeat-end").value = "18:30";
+  submit("recurrence-form");
+  await waitFor(
+    () =>
+      $("recurrence-form").hidden &&
+      $("recurrence-list").textContent.includes(`Daily ${suffix}`),
+    "create daily schedule",
+  );
+  $("recurrence-list").querySelector("button").click();
+  $("recurrences-dialog").querySelector("[data-close]").click();
+  assert($("recurrences-dialog").open && !$("recurrence-list").hidden);
+  assert.equal(w.location.pathname, "/recurring");
   $("recurrences-dialog").close();
   await click("overview-view");
   await waitFor(
     () => w.document.querySelectorAll(".calendar-day").length > 90,
     "bounded calendar",
   );
+  assert.equal(w.location.pathname, "/overview");
   assert(w.document.querySelectorAll(".calendar-day").length <= 112);
   assert.equal(w.document.querySelectorAll(".period-group.month").length, 3);
   for (const group of w.document.querySelectorAll(".period-group.week")) {
