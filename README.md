@@ -60,6 +60,26 @@ Production settings require a random secret of at least 50 characters and explic
 
 The built-in login limit is 10 attempts per username and 30 per connecting IP in 15 minutes, stored in SQLite so it applies across workers. Behind a proxy, the IP bucket covers that proxy; the username bucket remains independent. For larger multi-user deployments, add per-client rate limiting at your trusted ingress. The supplied stack is sized for personal use or a small team, with one Gunicorn worker and four threads. Keep framework/container security updates current and review changes before rebuilding. No deployment or TLS certificate is created merely by pushing this repository.
 
+## Published image and Watchtower
+
+The `.github/workflows/publish-docker.yaml` workflow builds on every push to `main`, and can also be run manually from the Actions tab on `main`. It follows the publishing pattern in [Neverbolt/year](https://github.com/Neverbolt/year/blob/main/.github/workflows/publish-docker.yaml): authenticate to GHCR with the built-in `GITHUB_TOKEN`, then push a timestamp tag and `latest`. It also publishes `sha-<full commit SHA>` for identifying or rolling back a build.
+
+The workflow runs the backend test suite inside the built image before pushing anything. Concurrent publishing runs are serialized, and `latest` is pushed last. Pull requests and feature branches never update the image watched by production. The initial publish happens after this application and workflow are merged into `main`.
+
+Your existing service can keep using:
+
+```yaml
+paradeis:
+  image: ghcr.io/neverbolt/paradeis:latest
+  restart: unless-stopped
+  labels:
+    - com.centurylinklabs.watchtower.enable=true
+```
+
+Keep your production environment variables, network/proxy settings, and persistent `/data` volume alongside that configuration. On a successful publish, your Watchtower instance checks for the new `latest` image on its configured 300-second interval. Its mounted `/config.json` must contain GHCR credentials with pull access if the package is private. No additional publishing secret is needed in Actions; the workflow grants `packages: write` to `GITHUB_TOKEN`.
+
+The image runs migrations at startup. Preserve and back up `/data` across replacements. To roll back, select a previous timestamp or SHA tag; database schema changes may also require restoring a compatible backup.
+
 ### Account maintenance
 
 - Users can change their password in Settings.
