@@ -1,7 +1,7 @@
 """Timer and scheduling rules. All timer mutations run in a database transaction."""
 
 import math
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from datetime import timezone as dt_timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -19,8 +19,25 @@ def preferences(user):
     return Preferences.objects.get_or_create(user=user)[0]
 
 
-def local_day(prefs, now=None):
+def calendar_day(prefs, now=None):
     return (now or timezone.now()).astimezone(ZoneInfo(prefs.timezone)).date()
+
+
+def local_day(prefs, now=None):
+    local = (now or timezone.now()).astimezone(ZoneInfo(prefs.timezone))
+    day = local.date()
+    cutoff = getattr(prefs, "day_rollover", time(0))
+    boundary = datetime.combine(day, cutoff).replace(tzinfo=local.tzinfo, fold=0)
+    utc_boundary = boundary.astimezone(dt_timezone.utc)
+    if utc_boundary.astimezone(local.tzinfo).replace(tzinfo=None) != boundary.replace(tzinfo=None):
+        # A skipped cutoff advances at the first valid wall time after the jump.
+        before = local.time() < cutoff
+    else:
+        # The first occurrence of a repeated cutoff wins; the day never rolls back.
+        before = local.astimezone(dt_timezone.utc) < utc_boundary
+    if before:
+        day -= timedelta(days=1)
+    return day
 
 
 def instant(day, clock, prefs):
@@ -68,7 +85,7 @@ def settle(user, prefs, now):
 
 
 def check_room(user, prefs, start, end, ignore_block=None):
-    first, last = local_day(prefs, start), local_day(prefs, end)
+    first, last = calendar_day(prefs, start), calendar_day(prefs, end)
     for block in Block.objects.filter(user=user, date__range=(first, last), deleted=False):
         if block.id == ignore_block:
             continue
@@ -85,7 +102,7 @@ def next_focus(user, prefs, now, ignore_break=False):
     for block in Block.objects.filter(
         user=user,
         deleted=False,
-        date__range=(local_day(prefs, now), local_day(prefs, now) + timedelta(days=1)),
+        date__range=(calendar_day(prefs, now), calendar_day(prefs, now) + timedelta(days=1)),
     ):
         start, end = block_bounds(block, prefs)
         if start <= now < end:
@@ -164,7 +181,7 @@ def record_meeting(user, prefs, now, block_id):
     session = Session.objects.create(
         user=user,
         block=block,
-        date=block.date,
+        date=local_day(prefs, start),
         kind="meeting",
         title=block.title,
         started_at=start,
@@ -176,7 +193,7 @@ def record_meeting(user, prefs, now, block_id):
         elapsed_seconds=seconds,
         status="completed",
     )
-    count = Session.objects.filter(user=user, date=block.date, status="completed").count()
+    count = Session.objects.filter(user=user, date=session.date, status="completed").count()
     minutes = prefs.long_break if count % prefs.long_every == 0 else prefs.short_break
     session.break_until = end + timedelta(minutes=minutes)
     session.save(update_fields=["break_until"])
@@ -297,8 +314,9 @@ def plan(day, prefs, blocks, sessions, now):
     """Project complete pomos into free time only; never fabricate historical work."""
     if day < local_day(prefs, now):
         return []
-    start = max(instant(day, prefs.day_start, prefs), now)
-    stop = instant(day, prefs.day_end, prefs)
+    schedule_day = day + timedelta(days=int(prefs.day_start < prefs.day_rollover))
+    start = max(instant(schedule_day, prefs.day_start, prefs), now)
+    stop = instant(schedule_day, prefs.day_end, prefs)
     occupied = [block_bounds(b, prefs) for b in blocks]
     count = sum(s.status == "completed" for s in sessions)
     for session in sessions:

@@ -20,6 +20,7 @@ from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_te
 from .services import (
     Conflict,
     block_bounds,
+    calendar_day,
     check_room,
     complete,
     instant,
@@ -54,7 +55,7 @@ def api(methods):
                 with transaction.atomic():
                     prefs = preferences(request.user)
                     now = timezone.now()
-                    today = local_day(prefs, now)
+                    today = calendar_day(prefs, now)
                     freeze_elapsed(request.user, prefs, today)
                     materialize(request.user, today, today + timedelta(days=1), today)
                     active = settle(request.user, prefs, now)
@@ -175,7 +176,7 @@ def service_worker(request):
     return response
 
 
-def day_data(user, prefs, day, now, sessions=None, blocks=None):
+def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None):
     sessions = (
         list(
             Session.objects.filter(user=user, date=day)
@@ -186,10 +187,17 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None):
         else sessions
     )
     if blocks is None:
-        materialize(user, day, day, local_day(prefs, now))
-        blocks = list(Block.objects.filter(user=user, date=day, deleted=False))
+        materialize(user, day, day + timedelta(days=int(prefs.day_rollover != time(0))), calendar_day(prefs, now))
+        blocks = list(Block.objects.filter(user=user, date__range=(day, day + timedelta(days=1)),
+                                           deleted=False).prefetch_related("session_set"))
+    blocks = [b for b in blocks if local_day(prefs, block_bounds(b, prefs)[0]) == day
+              and not any(s.status != "cancelled" and s.date != day for s in b.session_set.all())]
+    if completed_tasks is None:
+        completed_tasks = list(Task.objects.filter(user=user, done=True, completed_on=day)
+                               .values("id", "title", "completed_on"))
     return {
         "date": day.isoformat(),
+        "completed_tasks": completed_tasks,
         "sessions": [serialize_session(s, now) for s in sessions],
         "blocks": [serialize_block(b, prefs) for b in blocks],
         "plan": plan(day, prefs, blocks, sessions, now),
@@ -211,12 +219,13 @@ def state(request, data, prefs, now, active):
         .order_by("-ended_at")[:10]
     )
     tasks = list(
-        Task.objects.filter(user=request.user, archived=False).values(
-            "id", "title", "done", "position"
+        Task.objects.filter(user=request.user, archived=False)
+        .filter(Q(done=False) | Q(completed_on=day) | Q(completed_on__isnull=True)).values(
+            "id", "title", "done", "position", "completed_on"
         )
     )
     live_block = None
-    for block in Block.objects.filter(user=request.user, date=local_day(prefs, now), deleted=False):
+    for block in Block.objects.filter(user=request.user, date=calendar_day(prefs, now), deleted=False):
         start, end = block_bounds(block, prefs)
         if start <= now < end:
             live_block = serialize_block(block, prefs)
@@ -235,6 +244,7 @@ def state(request, data, prefs, now, active):
             "today": local_day(prefs, now).isoformat(),
             "preferences": {
                 "timezone": prefs.timezone,
+                "day_rollover": str(prefs.day_rollover)[:5],
                 "day_start": str(prefs.day_start)[:5],
                 "day_end": str(prefs.day_end)[:5],
                 "focus_minutes": prefs.focus_minutes,
@@ -262,13 +272,22 @@ def history(request, data, prefs, now, active):
     end = parse_day(request.GET["end"]) if "end" in request.GET else start + timedelta(days=6)
     if not 0 <= (end - start).days <= 111:
         raise ValueError("Load at most 112 days at a time.")
-    materialize(request.user, start, end, local_day(prefs, now))
+    materialize(request.user, start, end + timedelta(days=int(prefs.day_rollover != time(0))), calendar_day(prefs, now))
     sessions = list(
         Session.objects.filter(user=request.user, date__range=(start, end))
         .exclude(status="cancelled")
         .prefetch_related("allocations")
     )
-    blocks = list(Block.objects.filter(user=request.user, date__range=(start, end), deleted=False))
+    blocks = list(Block.objects.filter(user=request.user,
+        date__range=(start, end + timedelta(days=1)), deleted=False).prefetch_related("session_set"))
+    blocks_by_day = {}
+    for block in blocks:
+        day = local_day(prefs, block_bounds(block, prefs)[0])
+        blocks_by_day.setdefault(day, []).append(block)
+    completed_by_day = {}
+    for task in (Task.objects.filter(user=request.user, done=True, completed_on__range=(start, end))
+                 .values("id", "title", "completed_on")):
+        completed_by_day.setdefault(task["completed_on"], []).append(task)
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     note_rows = list(
         Note.objects.filter(user=request.user, date__range=(start.replace(day=1), end))
@@ -287,7 +306,8 @@ def history(request, data, prefs, now, active):
                     day,
                     now,
                     [s for s in sessions if s.date == day],
-                    [b for b in blocks if b.date == day],
+                    blocks_by_day.get(day, []),
+                    completed_by_day.get(day, []),
                 )
                 for day in days
             ],
@@ -305,8 +325,8 @@ def task_create(request, data, prefs, now, active):
     title = text(data, "title", 200)
     if not title:
         raise ValueError("Give your task a name.")
-    if Task.objects.filter(user=request.user, archived=False).count() >= 200:
-        raise ValueError("Archive completed tasks before adding more (200 active tasks maximum).")
+    if Task.objects.filter(user=request.user, archived=False, done=False).count() >= 200:
+        raise ValueError("Complete or archive tasks before adding more (200 pending tasks maximum).")
     last = Task.objects.filter(user=request.user).aggregate(last=Max("position"))["last"] or 0
     task = Task.objects.create(user=request.user, title=title, position=last + 1)
     return JsonResponse({"id": task.id}, status=201)
@@ -322,6 +342,14 @@ def task_update(request, data, prefs, now, active, pk):
             raise ValueError("Give your task a name.")
     elif action == "toggle":
         task.done = not task.done
+        task.completed_on = local_day(prefs, now) if task.done else None
+    elif action == "date_completed":
+        if not task.done or task.completed_on is not None:
+            raise ValueError("Choose an undated completed task.")
+        day = parse_day(data["date"])
+        if day > local_day(prefs, now):
+            raise ValueError("Completion dates cannot be in the future.")
+        task.completed_on = day
     elif action == "archive":
         task.archived = True
     elif action == "first":
@@ -477,7 +505,7 @@ def block_save(request, data, prefs, now, active, pk=None):
     start, end = block_bounds(block, prefs)
     if end - start > timedelta(hours=12):
         raise ValueError("Blocks can be at most 12 hours long.")
-    materialize(request.user, block.date, block.date, local_day(prefs, now))
+    materialize(request.user, block.date, block.date, calendar_day(prefs, now))
     check_room(request.user, prefs, start, end, pk)
     sessions = (
         Session.objects.filter(user=request.user)
@@ -511,21 +539,21 @@ def block_save(request, data, prefs, now, active, pk=None):
             frequency=repeat.get("frequency", "weekly"),
             interval_weeks=integer(repeat, "interval_weeks", 1, 12),
             anchor_date=block.date,
-            effective_from=max(block.date, local_day(prefs, now) + timedelta(days=1)),
+            effective_from=max(block.date, calendar_day(prefs, now) + timedelta(days=1)),
         )
         if template.frequency not in ["daily", "weekly"]:
             raise ValueError("Choose a daily or weekly schedule.")
-        validate_template(template, local_day(prefs, now), block.id)
+        validate_template(template, calendar_day(prefs, now), block.id)
         template.save()
         block.template, block.occurrence_date = template, block.date
-        block.fixed = block.date <= local_day(prefs, now)
+        block.fixed = block.date <= calendar_day(prefs, now)
         block.save()
     return JsonResponse({"id": block.id})
 
 
 @api(["GET", "POST"])
 def recurrences(request, data, prefs, now, active, pk=None):
-    today = local_day(prefs, now)
+    today = calendar_day(prefs, now)
     if request.method == "POST":
         template = (
             BlockTemplate.objects.get(user=request.user, id=pk)
@@ -624,6 +652,7 @@ def settings_save(request, data, prefs, now, active):
     ):
         raise Conflict("Finish your timer and remove upcoming blocks before changing timezone.")
     prefs.timezone, prefs.day_start, prefs.day_end = zone, start, end
+    prefs.day_rollover = clock(data.get("day_rollover", str(prefs.day_rollover)))
     instant(local_day(prefs, now), start, prefs)
     instant(local_day(prefs, now), end, prefs)
     for field, low, high in [

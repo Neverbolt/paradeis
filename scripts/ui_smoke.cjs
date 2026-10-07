@@ -22,7 +22,7 @@ const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (e) => errors.push(e.message));
 let dom;
 const notifications = [];
-let delayNextNote = false, delayedNote;
+let delayNextNote = false, delayedNote, overrideToday;
 
 async function fetchWithCookies(url, options = {}) {
   const target = new URL(url, base).href;
@@ -69,7 +69,13 @@ async function waitFor(check, label) {
     virtualConsole,
     beforeParse(window) {
       window.fetch = async (url, options) => {
-        const response = await fetchWithCookies(url, options);
+        let response = await fetchWithCookies(url, options);
+        if (overrideToday && String(url).includes("/api/state/")) {
+          const data = await response.json();
+          data.today = overrideToday;
+          data.day.date = new URL(url, base).searchParams.get("date") || overrideToday;
+          response = { ok: true, status: 200, json: async () => data };
+        }
         if (delayNextNote && String(url).includes("/api/notes/?")) {
           delayNextNote = false;
           await new Promise(resolve => { delayedNote = resolve; });
@@ -144,6 +150,13 @@ async function waitFor(check, label) {
     $("task-form").compareDocumentPosition($("completed-task-list")) &
       w.Node.DOCUMENT_POSITION_FOLLOWING,
   );
+  const completedState = await (await fetchWithCookies(base + "/api/state/")).json();
+  assert.equal(completedState.day.completed_tasks.length, 1);
+  assert.equal(completedState.tasks.find(t => t.done).completed_on, completedState.today);
+  await click("overview-view");
+  await waitFor(() => w.document.querySelector(".day-completed-tasks"), "completed task in calendar");
+  assert(w.document.querySelector(".completed-result").textContent.includes("Updated proposal"));
+  await click("today-view");
   $("completed-task-list").querySelector(".task-check").click();
   await waitFor(
     () => $("completed-task-list").children.length === 0,
@@ -354,6 +367,15 @@ async function waitFor(check, label) {
     await fetchWithCookies(`${base}/api/notes/?period=day&date=${saved.today}`)
   ).json();
   assert.equal(note.text, "Newer saved note");
+  const tomorrowDay = new Date(saved.today + "T12:00:00Z");
+  tomorrowDay.setUTCDate(tomorrowDay.getUTCDate() + 1);
+  overrideToday = tomorrowDay.toISOString().slice(0, 10);
+  await w.refresh();
+  assert($("timeline-date").textContent.includes(String(tomorrowDay.getUTCDate())));
+  assert.equal($("task-list").children.length, 2, "Pending tasks survive midnight");
+  overrideToday = undefined;
+  await w.refresh();
+  await w.loadDayNote();
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
     "PASS: login, tasks, timer, pause/resume, freeform sand review, overrun, notification, recurring blocks, bounded calendar, and day/week/month notes.",

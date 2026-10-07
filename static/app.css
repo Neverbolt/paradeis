@@ -1147,3 +1147,7 @@ dialog::backdrop {
   .task-scroll { max-height: 24dvh; flex: none; }
   .task-scroll .task-list { max-height: none; }
 }
+
+.day-completed-tasks { max-height: 100px; overflow-y: auto; margin-bottom: 8px; }
+.completed-result { font-size: 11px; overflow-wrap: anywhere; margin-top: 3px; }
+.task-group-label { margin-top: 6px; }

@@ -173,6 +173,12 @@ async function refresh() {
     previous = state?.active;
   const data = await api(`state/${selectedDay ? `?date=${selectedDay}` : ""}`);
   if (version !== requestVersion) return;
+  if (state && selectedDay === state.today && data.today !== state.today) {
+    selectedDay = data.today;
+    await refresh();
+    if (overviewVisible) await loadCalendar({ preserve: true });
+    return;
+  }
   if (data.active && data.active.id !== previous?.id) completionTitle = "";
   state = data;
   serverOffset = Date.parse(data.now) - Date.now();
@@ -239,7 +245,14 @@ function renderTasks() {
   list.replaceChildren();
   completed.replaceChildren();
   const first = state.tasks.find((t) => !t.done);
-  for (const t of state.tasks) {
+  const ordered = [...state.tasks].sort((a, b) =>
+    Number(a.done && !a.completed_on) - Number(b.done && !b.completed_on));
+  let undatedHeading = false;
+  for (const t of ordered) {
+    if (t.done && !t.completed_on && !undatedHeading) {
+      completed.append(el("p", "small muted task-group-label", "Undated"));
+      undatedHeading = true;
+    }
     const row = el("div", `task-row${t.done ? " completed" : ""}`);
     const input = el("input", "task-title");
     input.value = taskDrafts.get(t.id) ?? t.title;
@@ -287,6 +300,10 @@ function renderTasks() {
       input,
     );
     const actions = el("div", "task-actions");
+    if (t.done && !t.completed_on)
+      actions.append(button("↳", "", () => mutate(`tasks/${t.id}/`,
+        {action: "date_completed", date: selectedDay}),
+        `Attach ${t.title} to ${selectedDay}`));
     if (!t.done && t.id !== first?.id)
       actions.append(
         button(
@@ -1021,6 +1038,16 @@ async function loadCalendar({ target, preserve = false } = {}) {
     }
   }
 }
+function completedTasks(day) {
+  const group = el("section", "day-completed-tasks");
+  group.setAttribute("aria-label", "Completed tasks");
+  group.append(el("h3", "small muted", "Completed"));
+  for (const task of day.completed_tasks || []) {
+    const row = el("p", "completed-result", `✓ ${task.title}`);
+    group.append(row);
+  }
+  return group;
+}
 function renderCalendar() {
   const grid = $("calendar-grid"),
     days = calendarData.days;
@@ -1049,6 +1076,7 @@ function renderCalendar() {
       timeline,
       noteEditor("day", day.date, day.summary, day.date),
     );
+    if (day.completed_tasks?.length) card.lastChild.prepend(completedTasks(day));
     grid.append(card);
   });
   for (let i = 0; i < days.length; i += 7)
@@ -1173,7 +1201,7 @@ $("settings-open").onclick = openSettings;
 $("settings-form").onsubmit = (e) => {
   e.preventDefault();
   const data = {};
-  for (const field of ["timezone", "day_start", "day_end"])
+  for (const field of ["timezone", "day_start", "day_end", "day_rollover"])
     data[field] = $(field).value;
   for (const field of [
     "focus_minutes",

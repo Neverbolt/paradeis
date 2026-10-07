@@ -8,6 +8,7 @@ from django.db.models import Q
 class Preferences(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     timezone = models.CharField(max_length=64, default="Europe/Brussels")
+    day_rollover = models.TimeField(default=time(0, 0))
     day_start = models.TimeField(default=time(9, 0))
     day_end = models.TimeField(default=time(17, 0))
     focus_minutes = models.PositiveSmallIntegerField(default=25)
@@ -56,12 +57,14 @@ class Task(models.Model):
     title = models.CharField(max_length=200)
     position = models.PositiveIntegerField(default=0)
     done = models.BooleanField(default=False)
+    completed_on = models.DateField(null=True, blank=True)
     archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["position", "id"]
-        indexes = [models.Index(fields=["user", "archived", "position"])]
+        indexes = [models.Index(fields=["user", "archived", "position"]),
+                   models.Index(fields=["user", "completed_on"])]
 
 
 class Block(models.Model):
