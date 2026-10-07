@@ -10,7 +10,7 @@
   --sand-light: #f2e8d1;
   --lilac: #ece7ef;
   --day-width: 208px;
-  --day-gap: 10px;
+  --day-gap: 8px;
 }
 * {
   box-sizing: border-box;
@@ -168,19 +168,20 @@ select:focus {
 }
 .workspace {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr);
-  min-height: 100dvh;
+  grid-template-columns: 44px minmax(0, 1fr);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 .sidebar {
   position: sticky;
   top: 0;
   height: 100dvh;
   padding: 20px 0;
-  border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 22px;
+  gap: 16px;
   background: var(--paper);
   z-index: 2;
 }
@@ -195,17 +196,16 @@ select:focus {
   gap: 8px;
 }
 .rail-tools {
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
+  padding-top: 0;
 }
 .rail-control {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  padding: 9px;
+  width: 34px;
+  height: 34px;
+  padding: 7px;
   border-radius: 10px;
   color: var(--muted);
 }
@@ -245,22 +245,42 @@ select:focus {
   opacity: 1;
   visibility: visible;
 }
-.main-content {
-  padding: 22px 28px;
-  min-width: 0;
+.workspace-page {
+  height: 100dvh;
+  overflow: hidden;
 }
+.main-content {
+  padding: 16px 20px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.main-content > .error-banner {
+  flex-shrink: 0;
+}
+
 .day-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.95fr) minmax(300px, 1.1fr);
   gap: 30px;
   max-width: 1160px;
   margin: 0 auto;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
 }
 .focus-column,
 .timeline-column {
   min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .timer-card {
+  flex-shrink: 0;
   background: var(--sage);
   border: 1px solid #dde5d5;
   border-radius: 12px;
@@ -321,7 +341,11 @@ select:focus {
   font-variant-numeric: tabular-nums;
 }
 .tasks-section {
-  margin-top: 20px;
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 .section-heading {
   display: flex;
@@ -338,6 +362,8 @@ select:focus {
   margin-left: 4px;
 }
 .task-list {
+  overflow-y: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -369,6 +395,11 @@ select:focus {
   color: var(--green);
 }
 .task-title {
+  width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   flex: 1;
   min-width: 0;
   font-size: 12px;
@@ -407,17 +438,16 @@ select:focus {
 }
 .review-prompt {
   margin-top: 10px;
-  padding: 8px 10px;
-  background: var(--sand-light);
-  border-radius: 7px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
+  flex-shrink: 0;
 }
-.review-prompt button {
-  color: #806326;
-  padding: 2px;
+.pending-review {
+  background: var(--sand-light);
+  border-color: #e5d8bc;
+}
+.review-context {
+  display: block;
+  color: #8b703d;
+  margin-bottom: 4px;
 }
 .timeline-toolbar,
 .date-navigation {
@@ -435,14 +465,15 @@ select:focus {
   color: var(--muted);
 }
 .timeline-toolbar {
+  flex-shrink: 0;
   margin-bottom: 10px;
 }
 .timeline {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-height: calc(100dvh - 208px);
-  min-height: 130px;
+  min-height: 0;
+  flex: 1;
   overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
@@ -542,11 +573,13 @@ select:focus {
   padding: 20px 10px;
 }
 .daily-summary {
+  flex-shrink: 0;
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
 .daily-summary textarea {
+  resize: none;
   font-size: 12px;
 }
 .daily-summary h2 {
@@ -563,7 +596,14 @@ select:focus {
   padding: 3px 9px;
   font-size: 10px;
 }
+#overview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .overview-toolbar {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -575,7 +615,9 @@ select:focus {
 }
 .calendar-scroll {
   overflow: auto;
-  max-height: calc(100dvh - 76px);
+  flex: 1;
+  min-height: 0;
+  scroll-snap-type: x mandatory;
   scrollbar-width: thin;
   scrollbar-color: #bcc8b0 transparent;
   --editor-width: 600px;
@@ -584,25 +626,32 @@ select:focus {
   display: grid;
   grid-auto-flow: row;
   gap: 12px var(--day-gap);
-  grid-template-rows: auto auto auto;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  height: 100%;
+  min-height: 420px;
   width: max-content;
-  padding-bottom: 14px;
+  padding-bottom: 0;
 }
 .calendar-day {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   grid-row: 1;
   background: #fffefa80;
   border: 1px solid var(--line);
   border-radius: 9px;
-  padding: 10px;
+  padding: 7px;
   min-width: 0;
 }
 .calendar-day.today {
   border-color: #91a57e;
 }
 .calendar-day.monday {
+  scroll-snap-align: start;
   border-left: 3px solid #b8c6aa;
 }
 .calendar-day-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -616,23 +665,25 @@ select:focus {
   font-weight: 500;
 }
 .calendar-day .timeline {
-  max-height: 320px;
-  min-height: 110px;
+  min-height: 0;
   padding: 0;
   gap: 5px;
 }
 .calendar-day .timeline-row {
-  grid-template-columns: 1fr;
-  gap: 1px;
+  grid-template-columns: 11px minmax(0, 1fr);
+  gap: 4px;
 }
 .calendar-day .timeline-time {
-  text-align: left;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  text-align: right;
+  align-self: stretch;
   padding: 0;
   font-size: 9px;
 }
 .calendar-day .timeline-item {
-  padding: 6px 7px;
-  min-height: 35px;
+  padding: 5px 6px;
+  min-height: 31px;
 }
 .calendar-day .timeline-item p {
   font-size: 11px;
@@ -649,6 +700,9 @@ select:focus {
 }
 .calendar-day .daily-summary h2 {
   display: none;
+}
+.calendar-day .daily-summary .muted {
+  font-size: 9px;
 }
 .calendar-day .daily-summary textarea {
   font-size: 11px;
@@ -908,7 +962,7 @@ dialog::backdrop {
 }
 @media (max-width: 720px) {
   .workspace {
-    grid-template-columns: 52px minmax(0, 1fr);
+    grid-template-columns: 44px minmax(0, 1fr);
   }
   .sidebar {
     padding: 16px 0;
@@ -927,8 +981,21 @@ dialog::backdrop {
   .timer-card {
     padding: 13px;
   }
-  .timeline {
-    max-height: 470px;
+  .day-layout {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .focus-column {
+    flex-shrink: 0;
+  }
+  .task-list {
+    max-height: 24dvh;
+  }
+  .timeline-column {
+    flex-shrink: 0;
+    height: 65dvh;
+    min-height: 330px;
   }
   .overview-toolbar {
     flex-wrap: wrap;
@@ -936,12 +1003,7 @@ dialog::backdrop {
   .overview-toolbar h2 {
     font-size: 12px;
   }
-  .calendar-scroll {
-    max-height: calc(100dvh - 85px);
-  }
-  :root {
-    --day-width: 180px;
-  }
+
   .period-editor .section-heading {
     flex-wrap: wrap;
     white-space: normal;
@@ -963,4 +1025,49 @@ dialog::backdrop {
   * {
     scroll-behavior: auto !important;
   }
+}
+
+.item-details {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.item-note {
+  color: var(--ink);
+}
+.item-meta {
+  align-items: flex-start;
+}
+.item-meta .sand-pile {
+  flex-shrink: 0;
+}
+.current-time > .timeline-time {
+  color: var(--green);
+  font-weight: 600;
+}
+@media (max-height: 600px) and (min-width: 721px) {
+  .timer-time {
+    font-size: 60px;
+  }
+  .timer-card {
+    padding: 12px;
+  }
+  .tasks-section {
+    margin-top: 10px;
+  }
+  .daily-summary {
+    margin-top: 8px;
+    padding-top: 6px;
+  }
+}
+
+.tasks-section > .section-heading,
+.tasks-section > .add-task {
+  flex-shrink: 0;
+}
+.item-details {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

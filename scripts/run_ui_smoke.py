@@ -60,7 +60,17 @@ def main():
                         time.sleep(0.1)
                 else:
                     raise RuntimeError("Local test server did not become ready.")
-                subprocess.run(["node", "scripts/ui_smoke.cjs"], cwd=root, env=env, check=True)
+                subprocess.run(
+                    [
+                        "node",
+                        "scripts/browser_smoke.cjs"
+                        if "--browser" in sys.argv
+                        else "scripts/ui_smoke.cjs",
+                    ],
+                    cwd=root,
+                    env=env,
+                    check=True,
+                )
             except Exception:
                 log.seek(0)
                 print(log.read().decode(), file=sys.stderr)

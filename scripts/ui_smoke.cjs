@@ -109,7 +109,19 @@ async function waitFor(check, label) {
     submit("task-form");
     await waitFor(() => $("task-title").value === "", "create task");
   }
-  assert($("task-list").textContent.includes(`Write a proposal ${suffix}`));
+  const taskInput = $("task-list").querySelector("input.task-title");
+  assert.equal(taskInput.value, `Write a proposal ${suffix}`);
+  taskInput.focus();
+  taskInput.value = `Updated proposal ${suffix}`;
+  taskInput.dispatchEvent(new w.Event("input", { bubbles: true }));
+  taskInput.blur();
+  await waitFor(
+    async () =>
+      (await (await fetchWithCookies(`${base}/api/state/`)).json()).tasks[0]
+        .title === `Updated proposal ${suffix}`,
+    "inline task rename",
+  );
+
   await click("timer-time");
   $("duration-input").value = "10";
   submit("duration-form");
@@ -145,6 +157,17 @@ async function waitFor(check, label) {
   );
   await click("timer-finish");
   await waitFor(() => $("review-dialog").open, "review after finishing");
+  $("review-dialog").close();
+  assert(
+    $("review-prompt")
+      .querySelector("button")
+      .textContent.includes(`Updated proposal ${suffix}`),
+  );
+  $("review-prompt").querySelector("button").click();
+  await waitFor(
+    () => $("review-dialog").open,
+    "entire pending review card clickable",
+  );
   await click("allocation-add");
   const rows = [...w.document.querySelectorAll(".allocation-row")];
   assert.equal(rows.length, 2);
@@ -164,6 +187,11 @@ async function waitFor(check, label) {
     "effort summary",
   );
   assert.equal(notifications.length, 1, "Notification deduplicated");
+  assert(
+    $("timeline").querySelector(".item-note").textContent.includes("Progress"),
+    "Session note visible inline",
+  );
+
   $("day-note").value = `Daily reflection ${suffix}`;
   change("day-note");
   submit("day-note-form");
@@ -226,6 +254,12 @@ async function waitFor(check, label) {
       `save ${period} note`,
     );
   }
+  assert(
+    w.document
+      .querySelector(".calendar-day .item-note")
+      ?.textContent.includes("Progress"),
+    "Overview note visible",
+  );
   const before = $("calendar-label").textContent;
   await click("month-prev");
   await waitFor(

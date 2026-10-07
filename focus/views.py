@@ -27,6 +27,7 @@ from .services import (
     next_focus,
     plan,
     preferences,
+    record_meeting,
     resize_session,
     serialize_block,
     serialize_session,
@@ -338,6 +339,9 @@ def task_update(request, data, prefs, now, active, pk):
 @api(["POST"])
 def timer(request, data, prefs, now, active):
     action = data.get("action")
+    if action == "record_meeting":
+        session = record_meeting(request.user, prefs, now, integer(data, "block_id", 1, 2**53 - 1))
+        return JsonResponse({"session": serialize_session(session, now)})
     if action == "set_next":
         prefs.next_focus_seconds = integer(data, "seconds", 1, 7200)
         prefs.save(update_fields=["next_focus_seconds"])

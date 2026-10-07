@@ -1,5 +1,6 @@
 {% extends 'base.html' %}{% load static %}
 {% block head %}<script src="{% static 'app.js' %}" defer></script>{% endblock %}
+{% block body_class %}workspace-page{% endblock %}
 {% block body %}
 <div class="workspace">
   <aside class="sidebar" aria-label="Main navigation">
@@ -28,7 +29,7 @@
       </section>
     </div>
     <section id="overview" hidden>
-      <div class="overview-toolbar"><div class="date-navigation"><button id="month-prev" class="icon-button" aria-label="Previous month">‹</button><button id="calendar-today" class="quiet small">Today</button><button id="month-next" class="icon-button" aria-label="Next month">›</button><h2 id="calendar-label"></h2></div><span id="calendar-total" class="small muted"></span></div>
+      <div class="overview-toolbar"><div class="date-navigation"><button id="month-prev" class="icon-button" aria-label="Previous week">‹</button><button id="calendar-today" class="quiet small">Today</button><button id="month-next" class="icon-button" aria-label="Next week">›</button><h2 id="calendar-label"></h2></div><span id="calendar-total" class="small muted"></span></div>
       <div id="calendar-scroll" class="calendar-scroll" tabindex="0" aria-label="Calendar, scroll horizontally"><div id="calendar-grid" class="calendar-grid"></div></div>
     </section>
   </main>
