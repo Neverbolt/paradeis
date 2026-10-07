@@ -1,0 +1,65 @@
+name: Publish Docker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Serialize writes to the shared latest tag.
+concurrency:
+  group: publish-docker-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Prepare image tags
+        run: |
+          IMAGE_NAME="ghcr.io/$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          TIMESTAMP=$(date -u +'%Y%m%d%H%M%S')
+          echo "IMAGE_NAME=$IMAGE_NAME" >> "$GITHUB_ENV"
+          echo "TIMESTAMP=$TIMESTAMP" >> "$GITHUB_ENV"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            -t "$IMAGE_NAME:$TIMESTAMP" \
+            -t "$IMAGE_NAME:sha-$GITHUB_SHA" \
+            -t "$IMAGE_NAME:latest" \
+            -f Dockerfile .
+
+      - name: Test the built image
+        run: |
+          docker run --rm --env DEBUG=1 --entrypoint python \
+            "$IMAGE_NAME:$TIMESTAMP" manage.py test --noinput
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image
+        run: |
+          # A queued or manually started run must not replace latest with old code.
+          CURRENT_MAIN="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$CURRENT_MAIN" != "$GITHUB_SHA" ]; then
+            echo "main has advanced; the newer workflow run will publish latest."
+            exit 0
+          fi
+          docker push "$IMAGE_NAME:$TIMESTAMP"
+          docker push "$IMAGE_NAME:sha-$GITHUB_SHA"
+          # Publish latest last: Watchtower follows this tag.
+          docker push "$IMAGE_NAME:latest"
