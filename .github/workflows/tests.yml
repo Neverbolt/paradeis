@@ -1,0 +1,28 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DEBUG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python manage.py test
+      - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py collectstatic --noinput
+      - run: node --check static/app.js
+      - name: Check production configuration
+        env:
+          DEBUG: "0"
+          SECRET_KEY: ci-only-not-a-deployed-secret-0123456789-abcdefghijklmnopqrstuvwxyz
+          ALLOWED_HOSTS: focus.example.com
+        run: python manage.py check --deploy --fail-level WARNING
+      - name: Build container
+        run: docker build -t paradeis:test .

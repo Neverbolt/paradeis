@@ -218,3 +218,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Paradeis local runtime and UI checks
+staticfiles/
+*.sqlite3*
+node_modules/
+test-results/
+playwright-report/
