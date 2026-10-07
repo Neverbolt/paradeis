@@ -17,6 +17,11 @@ let calendarAnchor,
   expiryRefresh = 0,
   toastTimeout;
 const taskDrafts = new Map();
+const noteReads = new Map();
+let completionTitle = "";
+function titleMode() {
+  return localStorage.getItem("tab-title-mode") === "completion" ? "completion" : "countdown";
+}
 let calendarWeek,
   calendarDayWidth = 208;
 const drafts = new Map(),
@@ -85,7 +90,16 @@ function duration(value) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 function stats(s) {
-  return `${Math.floor((s?.seconds || 0) / 60)} min · ${s?.count || 0} sessions · ${s?.effort || 0} sand`;
+  return `${Math.floor((s?.seconds || 0) / 60)} min · ${s?.count || 0} sessions`;
+}
+function renderStats(target, summary) {
+  const total = el("span", "sand-total", String(summary?.effort || 0));
+  total.append(el("i", "sand-symbol"));
+  total.setAttribute("aria-label", `${summary?.effort || 0} sand`);
+  target.replaceChildren(
+    document.createTextNode(stats(summary) + " · "),
+    total,
+  );
 }
 function csrf() {
   return document.querySelector('[name="csrfmiddlewaretoken"]').value;
@@ -133,12 +147,12 @@ function toast(message) {
   clearTimeout(toastTimeout);
   toastTimeout = setTimeout(() => ($("toast").hidden = true), 2500);
 }
-async function mutate(path, data, dialog) {
+async function mutate(path, data, dialog, close = true) {
   if (busy) return false;
   busy = true;
   try {
     await api(path, data);
-    if (dialog) dialog.close();
+    if (dialog && close) dialog.close();
     await refresh();
     if (overviewVisible) await loadCalendar({ preserve: true });
     return true;
@@ -159,6 +173,7 @@ async function refresh() {
     previous = state?.active;
   const data = await api(`state/${selectedDay ? `?date=${selectedDay}` : ""}`);
   if (version !== requestVersion) return;
+  if (data.active && data.active.id !== previous?.id) completionTitle = "";
   state = data;
   serverOffset = Date.parse(data.now) - Date.now();
   selectedDay = data.day.date;
@@ -191,7 +206,7 @@ function renderDay() {
     month: "short",
     day: "numeric",
   });
-  $("day-summary").textContent = stats(state.day.summary);
+  renderStats($("day-summary"), state.day.summary);
   renderTimeline($("timeline"), state.day);
   renderTasks();
   const pending = state.pending[0];
@@ -214,8 +229,15 @@ function renderTasks() {
   $("task-count").textContent = state.tasks.filter((t) => !t.done).length;
   const list = $("task-list");
   // A server refresh must not replace the input being edited.
-  if (list.contains(document.activeElement)) return;
+  const completed = $("completed-task-list");
+  if (
+    (list.contains(document.activeElement) ||
+      completed.contains(document.activeElement)) &&
+    document.activeElement.matches("input.task-title")
+  )
+    return;
   list.replaceChildren();
+  completed.replaceChildren();
   const first = state.tasks.find((t) => !t.done);
   for (const t of state.tasks) {
     const row = el("div", `task-row${t.done ? " completed" : ""}`);
@@ -286,7 +308,7 @@ function renderTasks() {
       ),
     );
     row.append(actions);
-    list.append(row);
+    (t.done ? completed : list).append(row);
   }
 }
 function entries(day) {
@@ -361,10 +383,14 @@ function renderTimeline(container, day) {
           (item) =>
             Date.parse(item.start) <= now() && Date.parse(item.end) > now(),
         ) ||
-        all.find((item) => Date.parse(item.start) >= now()) ||
-        all.at(-1)
+        all.find((item) => Date.parse(item.start) >= now())
       : null;
   for (const item of all) {
+    if (item === current) {
+      const marker = el("div", "now-marker", `Now · ${clock(now())}`);
+      marker.setAttribute("aria-label", `Current time ${clock(now())}`);
+      container.append(marker);
+    }
     if (
       container.id !== "timeline" &&
       item.type === "plan" &&
@@ -388,14 +414,15 @@ function renderTimeline(container, day) {
     else row.append(timelineCard(item));
     container.append(row);
   }
-  if (!container.childElementCount)
-    container.append(el("p", "timeline-empty", "No sessions"));
+  if (day.date === state.today && !current)
+    container.append(el("div", "now-marker", `Now · ${clock(now())}`));
+  if (!all.length) container.append(el("p", "timeline-empty", "No sessions"));
   container.scrollTop = previousScroll;
-  if (container.id === "timeline" && !overviewVisible && current)
+  if (container.id === "timeline" && !overviewVisible && day.date === state.today)
     requestAnimationFrame(() => followCurrentTime(container));
 }
 function followCurrentTime(container) {
-  const row = container.querySelector(".current-time");
+  const row = container.querySelector(".current-time") || container.querySelector(".now-marker");
   if (!row || !container.clientHeight) return;
   const box = row.getBoundingClientRect(),
     parent = container.getBoundingClientRect();
@@ -489,7 +516,10 @@ function tick() {
     task = state.tasks.find((t) => !t.done)?.title || "";
     label = "Start";
   }
-  document.title = `${duration(seconds)} · Paradeis`;
+  const tabTitle = titleMode() === "completion"
+    ? completionTitle || "Paradeis"
+    : `${duration(seconds)} · Paradeis`;
+  if (document.title !== tabTitle) document.title = tabTitle;
   $("timer-time").textContent = duration(seconds);
   $("timer-mode").textContent = mode;
   $("timer-task").textContent = task;
@@ -727,7 +757,13 @@ $("block-form").onsubmit = (e) => {
     end: $("block-end").value,
   };
   if (!editingBlock && $("block-repeat").checked)
-    data.repeat = { interval_weeks: Number($("block-interval").value) };
+    data.repeat = {
+      frequency: $("block-interval").value === "daily" ? "daily" : "weekly",
+      interval_weeks:
+        $("block-interval").value === "daily"
+          ? 1
+          : Number($("block-interval").value),
+    };
   mutate(
     `blocks/${editingBlock ? `${editingBlock.id}/` : ""}`,
     data,
@@ -740,6 +776,8 @@ async function openRecurrences(id) {
   try {
     templates = (await api("recurrences/")).templates;
     $("recurrence-form").hidden = true;
+    $("recurrence-list").hidden = false;
+    $("recurrence-add").hidden = false;
     const list = $("recurrence-list");
     list.replaceChildren();
     for (const t of templates) {
@@ -748,7 +786,7 @@ async function openRecurrences(id) {
         el(
           "span",
           "",
-          `${t.title} · ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][t.weekday]} ${t.start} · ${t.interval_weeks}w`,
+          `${t.title} · ${t.frequency === "daily" ? "Daily" : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][t.weekday]} ${t.start}${t.frequency === "daily" ? "" : ` · ${t.interval_weeks}w`}`,
         ),
         button("Edit", "secondary small", () => editRecurrence(t)),
       );
@@ -757,6 +795,7 @@ async function openRecurrences(id) {
     if (!templates.length)
       list.append(el("p", "small muted", "No recurring blocks"));
     if (id) editRecurrence(templates.find((t) => t.id === id));
+    setRoute("/recurring");
     openDialog($("recurrences-dialog"));
   } catch (e) {
     showError(e);
@@ -766,7 +805,11 @@ function editRecurrence(t) {
   if (!t) return;
   editingTemplate = t;
   $("recurrence-form").hidden = false;
+  $("recurrence-list").hidden = true;
+  $("recurrence-add").hidden = true;
+  $("recurrence-delete").hidden = !t.id;
   for (const [field, key] of [
+    ["frequency", "frequency"],
     ["title", "title"],
     ["kind", "kind"],
     ["weekday", "weekday"],
@@ -776,19 +819,44 @@ function editRecurrence(t) {
     ["anchor", "anchor_date"],
   ])
     $(`repeat-${field}`).value = t[key];
+  updateRepeatFrequency();
 }
+function updateRepeatFrequency() {
+  $("repeat-weekly").hidden = $("repeat-frequency").value === "daily";
+}
+$("repeat-frequency").onchange = updateRepeatFrequency;
+$("recurrence-add").onclick = () => {
+  const rounded = Math.ceil((now() + 1) / 300000) * 300000;
+  editRecurrence({
+    title: "",
+    kind: "meeting",
+    frequency: "weekly",
+    weekday:
+      new Date(localDate(rounded) + "T12:00:00Z").getUTCDay() === 0
+        ? 6
+        : new Date(localDate(rounded) + "T12:00:00Z").getUTCDay() - 1,
+    interval_weeks: 1,
+    start: clock(rounded),
+    end:
+      localDate(rounded + 3600000) === localDate(rounded)
+        ? clock(rounded + 3600000)
+        : "23:59",
+    anchor_date: localDate(rounded),
+  });
+};
 $("recurrences-open").onclick = () => openRecurrences();
 $("block-template-edit").onclick = () => {
   $("block-dialog").close();
   openRecurrences(editingBlock.template_id);
 };
-$("recurrence-form").onsubmit = (e) => {
+$("recurrence-form").onsubmit = async (e) => {
   e.preventDefault();
-  mutate(
-    `recurrences/${editingTemplate.id}/`,
+  const saved = await mutate(
+    `recurrences/${editingTemplate.id ? editingTemplate.id + "/" : ""}`,
     {
       title: $("repeat-title").value,
       kind: $("repeat-kind").value,
+      frequency: $("repeat-frequency").value,
       weekday: Number($("repeat-weekday").value),
       interval_weeks: Number($("repeat-interval").value),
       anchor_date: $("repeat-anchor").value,
@@ -796,18 +864,26 @@ $("recurrence-form").onsubmit = (e) => {
       end: $("repeat-end").value,
     },
     $("recurrences-dialog"),
+    false,
   );
+  if (saved) await openRecurrences();
 };
-$("recurrence-delete").onclick = () =>
-  mutate(
+$("recurrence-delete").onclick = async () => {
+  const saved = await mutate(
     `recurrences/${editingTemplate.id}/`,
     { action: "delete" },
     $("recurrences-dialog"),
+    false,
   );
+  if (saved) await openRecurrences();
+};
 async function loadDayNote() {
   const day = selectedDay,
     key = `day:${day}`;
+  const version = (noteReads.get(key) || 0) + 1;
+  noteReads.set(key, version);
   const n = await api(`notes/?period=day&date=${day}`);
+  if (noteReads.get(key) !== version) return;
   savedNotes.set(key, n.text);
   if (selectedDay !== day) return;
   $("day-note").value = drafts.get(key) ?? n.text;
@@ -822,6 +898,7 @@ async function saveNote(period, day, textarea, status) {
     text = textarea.value;
   try {
     await api("notes/", { period, date: day, text });
+    noteReads.set(key, (noteReads.get(key) || 0) + 1);
     savedNotes.set(key, text);
     if (drafts.get(key) === text) drafts.delete(key);
     if (calendarData) calendarData.notes[key] = text;
@@ -841,10 +918,8 @@ function noteEditor(period, day, summary, title) {
       period === "day" ? "daily-summary" : "period-editor",
     );
   const heading = el("div", "section-heading");
-  heading.append(
-    el("h2", "", title),
-    el("span", "small muted", stats(summary)),
-  );
+  heading.append(el("h2", "", title), el("span", "small muted"));
+  renderStats(heading.lastChild, summary);
   wrapper.append(heading);
   const form = el("form"),
     textarea = el("textarea");
@@ -877,7 +952,11 @@ async function changeDay(day) {
   selectedDay = day;
   await showView(false);
 }
-async function showView(overview) {
+async function showView(overview, updateUrl = true) {
+  if (updateUrl) {
+    closeRouteDialogs();
+    setRoute(overview ? "/overview" : "/");
+  }
   overviewVisible = overview;
   $("day-view").hidden = overview;
   $("overview").hidden = !overview;
@@ -895,6 +974,11 @@ async function showView(overview) {
     showError(e);
   }
 }
+$("home-link").onclick = (e) => {
+  e.preventDefault();
+  selectedDay = state.today;
+  showView(false);
+};
 $("today-view").onclick = () => showView(false);
 $("overview-view").onclick = () => showView(true);
 $("day-prev").onclick = () => changeDay(shiftDay(selectedDay, -1));
@@ -1017,7 +1101,8 @@ function updateCalendarWeek() {
   calendarWeek = calendarData.days[index].date;
   $("calendar-label").textContent =
     `${dateLabel(calendarWeek, { month: "short", day: "numeric" })} – ${dateLabel(shiftDay(calendarWeek, 6), { month: "short", day: "numeric", year: "numeric" })}`;
-  $("calendar-total").textContent = stats(
+  renderStats(
+    $("calendar-total"),
     calendarData.period_summaries[`week:${calendarWeek}`],
   );
 }
@@ -1076,11 +1161,15 @@ $("task-form").onsubmit = async (e) => {
   if (await mutate("tasks/", { title: $("task-title").value }))
     $("task-title").value = "";
 };
-$("settings-open").onclick = () => {
+function openSettings() {
+  $("tab-title-mode").value = titleMode();
   for (const [key, value] of Object.entries(state.preferences))
     if ($(key)) $(key).value = value;
+  updateNotifications();
+  setRoute("/settings");
   openDialog($("settings-dialog"));
-};
+}
+$("settings-open").onclick = openSettings;
 $("settings-form").onsubmit = (e) => {
   e.preventDefault();
   const data = {};
@@ -1095,8 +1184,65 @@ $("settings-form").onsubmit = (e) => {
     data[field] = Number($(field).value);
   mutate("settings/", data, $("settings-dialog"));
 };
+function returnToRecurrenceList() {
+  if ($("recurrence-form").hidden) return false;
+  $("recurrence-form").hidden = true;
+  $("recurrence-list").hidden = false;
+  $("recurrence-add").hidden = false;
+  return true;
+}
 for (const b of document.querySelectorAll("[data-close]"))
-  b.onclick = () => b.closest("dialog").close();
+  b.onclick = () => {
+    const dialog = b.closest("dialog");
+    if (dialog.id === "recurrences-dialog" && returnToRecurrenceList()) return;
+    dialog.close();
+  };
+$("recurrences-dialog").addEventListener("cancel", (e) => {
+  if (returnToRecurrenceList()) e.preventDefault();
+});
+let routeTransition = false;
+function setRoute(path) {
+  if (!routeTransition && location.pathname !== path)
+    history.pushState({}, "", path);
+}
+function closeRouteDialogs() {
+  routeTransition = true;
+  for (const id of ["settings-dialog", "recurrences-dialog"]) {
+    if ($(id).open) {
+      $(id).dataset.routeClosing = "yes";
+      $(id).close();
+    }
+  }
+  routeTransition = false;
+}
+for (const id of ["settings-dialog", "recurrences-dialog"])
+  $(id).addEventListener("close", () => {
+    if ($(id).dataset.routeClosing) {
+      delete $(id).dataset.routeClosing;
+      return;
+    }
+    if (
+      !document.querySelector(
+        "#settings-dialog[open], #recurrences-dialog[open]",
+      ) &&
+      ["/settings", "/recurring"].includes(location.pathname)
+    )
+      setRoute(overviewVisible ? "/overview" : "/");
+  });
+async function applyRoute() {
+  const path = location.pathname;
+  closeRouteDialogs();
+  if (path === "/overview") await showView(true, false);
+  else if (path === "/settings") openSettings();
+  else if (path === "/recurring") await openRecurrences();
+  else await showView(false, false);
+}
+window.addEventListener("popstate", () => applyRoute().catch(showError));
+$("tab-title-mode").value = titleMode();
+$("tab-title-mode").onchange = () => {
+  localStorage.setItem("tab-title-mode", $("tab-title-mode").value);
+  tick();
+};
 let worker;
 let deadlineTimeout;
 if ("serviceWorker" in navigator)
@@ -1113,6 +1259,13 @@ function updateNotifications() {
     "aria-pressed",
     available && Notification.permission === "granted" && notificationEnabled(),
   );
+  $("notifications-status").textContent = !available
+    ? "unavailable"
+    : Notification.permission === "denied"
+      ? "blocked"
+      : Notification.permission === "granted" && notificationEnabled()
+        ? "on"
+        : "off";
 }
 function askNotificationPermission() {
   if (
@@ -1154,6 +1307,10 @@ async function notifyEnd(s) {
   localStorage.setItem(key, "yes");
   const title = s.kind === "meeting" ? "Meeting complete" : "Focus complete",
     options = { body: s.title, tag: key, icon: "/static/icon.svg" };
+  if (titleMode() === "completion") {
+    completionTitle = `${title} · Paradeis`;
+    document.title = completionTitle;
+  }
   try {
     const registration = worker ? await worker : null;
     if (registration) await registration.showNotification(title, options);
@@ -1182,4 +1339,4 @@ setInterval(() => {
   if (!document.hidden && !busy) refresh().catch(showError);
 }, 15000);
 updateNotifications();
-refresh().catch(showError);
+refresh().then(applyRoute).catch(showError);

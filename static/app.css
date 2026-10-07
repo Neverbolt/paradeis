@@ -246,6 +246,9 @@ select:focus {
   visibility: visible;
 }
 .workspace-page {
+  position: fixed;
+  inset: 0;
+  width: 100%;
   height: 100dvh;
   overflow: hidden;
 }
@@ -1070,4 +1073,77 @@ dialog::backdrop {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.task-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.task-scroll .task-list {
+  overflow: visible;
+}
+.completed-task-list {
+  margin-top: 8px;
+}
+.current-time > .timeline-time {
+  color: #fff;
+  background: var(--green);
+  border-radius: 5px;
+  align-self: start;
+  padding: 6px 3px;
+  text-align: center;
+  font-weight: 700;
+}
+.current-time > .timeline-item,
+.current-time > .timeline-rest {
+  border: 2px solid var(--green);
+  box-shadow: 0 0 0 2px #45664418;
+}
+.now-marker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 0;
+}
+.now-marker::after {
+  content: "";
+  height: 2px;
+  flex: 1;
+  background: var(--green);
+}
+.calendar-day .timeline-time {
+  align-self: start;
+  text-align: center;
+  margin-top: 9px;
+}
+.calendar-day .current-time > .timeline-time {
+  padding: 3px 0;
+}
+.sand-total {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+.sand-symbol {
+  display: inline-block;
+  width: 13px;
+  height: 10px;
+  background: #b89760;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+#recurrence-add {
+  margin-bottom: 12px;
+}
+#notifications-toggle {
+  margin-top: 14px;
+}
+
+@media (max-width: 720px) {
+  .task-scroll { max-height: 24dvh; flex: none; }
+  .task-scroll .task-list { max-height: none; }
 }

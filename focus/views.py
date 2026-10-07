@@ -508,10 +508,13 @@ def block_save(request, data, prefs, now, active, pk=None):
             start=block.start,
             end=block.end,
             weekday=block.date.weekday(),
+            frequency=repeat.get("frequency", "weekly"),
             interval_weeks=integer(repeat, "interval_weeks", 1, 12),
             anchor_date=block.date,
             effective_from=max(block.date, local_day(prefs, now) + timedelta(days=1)),
         )
+        if template.frequency not in ["daily", "weekly"]:
+            raise ValueError("Choose a daily or weekly schedule.")
         validate_template(template, local_day(prefs, now), block.id)
         template.save()
         block.template, block.occurrence_date = template, block.date
@@ -524,8 +527,14 @@ def block_save(request, data, prefs, now, active, pk=None):
 def recurrences(request, data, prefs, now, active, pk=None):
     today = local_day(prefs, now)
     if request.method == "POST":
-        template = BlockTemplate.objects.get(user=request.user, id=pk)
+        template = (
+            BlockTemplate.objects.get(user=request.user, id=pk)
+            if pk
+            else BlockTemplate(user=request.user, timezone=prefs.timezone)
+        )
         if data.get("action") == "delete":
+            if not pk:
+                raise ValueError("Choose a schedule to delete.")
             template.active = False
             template.save(update_fields=["active"])
             rebuild_future(template, today)
@@ -533,15 +542,22 @@ def recurrences(request, data, prefs, now, active, pk=None):
             template.title = text(data, "title", 200)
             template.kind = data["kind"]
             template.start, template.end = clock(data["start"]), clock(data["end"])
+            template.frequency = data.get("frequency", "weekly")
             template.weekday = integer(data, "weekday", 0, 6)
             template.interval_weeks = integer(data, "interval_weeks", 1, 12)
             template.anchor_date = parse_day(data["anchor_date"])
-            template.anchor_date += timedelta(
-                days=template.weekday - template.anchor_date.weekday()
+            if template.frequency == "weekly":
+                template.anchor_date += timedelta(
+                    days=template.weekday - template.anchor_date.weekday()
+                )
+            template.effective_from = (
+                today + timedelta(days=1)
+                if pk
+                else max(today + timedelta(days=1), template.anchor_date)
             )
-            template.effective_from = today + timedelta(days=1)
             if (
                 not template.title
+                or template.frequency not in ["daily", "weekly"]
                 or template.kind not in ["meeting", "break"]
                 or template.start >= template.end
             ):
@@ -564,6 +580,7 @@ def recurrences(request, data, prefs, now, active, pk=None):
                     "start": str(t.start)[:5],
                     "end": str(t.end)[:5],
                     "weekday": t.weekday,
+                    "frequency": t.frequency,
                     "interval_weeks": t.interval_weeks,
                     "anchor_date": t.anchor_date.isoformat(),
                 }

@@ -11,15 +11,22 @@ from .models import Block, BlockTemplate
 
 
 def matches(template, day):
-    return (
-        day >= template.effective_from
-        and day.weekday() == template.weekday
-        and ((day - template.anchor_date).days // 7) % template.interval_weeks == 0
+    return day >= template.effective_from and (
+        template.frequency == "daily"
+        or (
+            day.weekday() == template.weekday
+            and ((day - template.anchor_date).days // 7) % template.interval_weeks == 0
+        )
     )
 
 
 def occurrence_days(template, first, last):
     first = max(first, template.effective_from)
+    if template.frequency == "daily":
+        while first <= last:
+            yield first
+            first += timedelta(days=1)
+        return
     day = first + timedelta(days=(template.weekday - first.weekday()) % 7)
     offset = ((day - template.anchor_date).days // 7) % template.interval_weeks
     if offset:
@@ -27,6 +34,11 @@ def occurrence_days(template, first, last):
     while day <= last:
         yield day
         day += timedelta(weeks=template.interval_weeks)
+
+
+def exception_key(template, day):
+    # Daily exceptions reserve one date; weekly exceptions reserve their aligned week.
+    return day if template.frequency == "daily" else day - timedelta(days=day.weekday())
 
 
 def materialize(user, first, last, today):
@@ -37,7 +49,7 @@ def materialize(user, first, last, today):
     templates = BlockTemplate.objects.filter(user=user, active=True)
     for template in templates:
         fixed_weeks = {
-            b.occurrence_date - timedelta(days=b.occurrence_date.weekday())
+            exception_key(template, b.occurrence_date)
             for b in Block.objects.filter(
                 template=template,
                 fixed=True,
@@ -47,7 +59,7 @@ def materialize(user, first, last, today):
             )
         }
         for day in occurrence_days(template, first, last):
-            if day - timedelta(days=day.weekday()) in fixed_weeks:
+            if exception_key(template, day) in fixed_weeks:
                 continue
             try:
                 block_bounds(
@@ -98,19 +110,26 @@ def validate_template(template, today, ignore_block=None):
         pk=template.pk
     ):
         if (
-            other.weekday != template.weekday
+            (
+                other.frequency == template.frequency == "weekly"
+                and other.weekday != template.weekday
+            )
             or template.start >= other.end
             or template.end <= other.start
         ):
             continue
         difference = (template.anchor_date - other.anchor_date).days // 7
-        if difference % math.gcd(template.interval_weeks, other.interval_weeks) == 0:
+        if (
+            template.frequency == "daily"
+            or other.frequency == "daily"
+            or difference % math.gcd(template.interval_weeks, other.interval_weeks) == 0
+        ):
             raise Conflict(f"This schedule overlaps recurring block “{other.title}”.")
     # Fixed exceptions win. Reject a new pattern that would collide with one,
     # instead of overwriting it or silently producing overlapping reservations.
     exceptions = (
         {
-            b.occurrence_date - timedelta(days=b.occurrence_date.weekday())
+            exception_key(template, b.occurrence_date)
             for b in Block.objects.filter(
                 template=template, fixed=True, occurrence_date__isnull=False
             )
@@ -121,9 +140,7 @@ def validate_template(template, today, ignore_block=None):
     for block in Block.objects.filter(
         user=template.user, fixed=True, deleted=False, date__gt=today
     ).exclude(pk=ignore_block):
-        if block.date - timedelta(days=block.date.weekday()) in exceptions or not matches(
-            template, block.date
-        ):
+        if exception_key(template, block.date) in exceptions or not matches(template, block.date):
             continue
         from types import SimpleNamespace
 

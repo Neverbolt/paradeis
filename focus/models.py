@@ -26,6 +26,9 @@ class BlockTemplate(models.Model):
     start = models.TimeField()
     end = models.TimeField()
     weekday = models.PositiveSmallIntegerField()
+    frequency = models.CharField(
+        max_length=6, choices=[("daily", "Daily"), ("weekly", "Weekly")], default="weekly"
+    )
     interval_weeks = models.PositiveSmallIntegerField(default=1)
     anchor_date = models.DateField()
     effective_from = models.DateField()
@@ -36,6 +39,9 @@ class BlockTemplate(models.Model):
         constraints = [
             models.CheckConstraint(
                 condition=Q(end__gt=models.F("start")), name="template_positive_length"
+            ),
+            models.CheckConstraint(
+                condition=Q(frequency__in=["daily", "weekly"]), name="template_frequency"
             ),
             models.CheckConstraint(condition=Q(weekday__lte=6), name="template_weekday"),
             models.CheckConstraint(
