@@ -4,7 +4,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN DEBUG=1 python manage.py collectstatic --noinput \
+RUN DEBUG=0 ALLOWED_HOSTS=localhost \
+    SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')" \
+    python manage.py collectstatic --noinput \
     && groupadd --gid 10001 paradeis \
     && useradd --uid 10001 --gid paradeis --no-create-home paradeis \
     && mkdir -p /data \

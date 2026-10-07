@@ -15,6 +15,7 @@ urlpatterns = [
         name="password_change",
     ),
     path("health/", views.health),
+    path("sw.js", views.service_worker),
     path("api/state/", views.state),
     path("api/history/", views.history),
     path("api/tasks/", views.task_create),
@@ -25,4 +26,6 @@ urlpatterns = [
     path("api/blocks/<int:pk>/", views.block_save),
     path("api/notes/", views.notes),
     path("api/settings/", views.settings_save),
+    path("api/recurrences/", views.recurrences),
+    path("api/recurrences/<int:pk>/", views.recurrences),
 ]

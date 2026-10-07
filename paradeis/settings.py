@@ -110,3 +110,12 @@ if os.getenv("TRUST_PROXY", "0") == "1":
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 DATA_UPLOAD_MAX_MEMORY_SIZE = 64 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 0
+
+# Request tracebacks must reach container stderr even when DEBUG is disabled.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"standard": {"format": "{asctime} {levelname} {name}: {message}", "style": "{"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "standard"}},
+    "loggers": {"django": {"handlers": ["console"], "level": "INFO", "propagate": False}},
+}

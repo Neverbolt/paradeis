@@ -2,18 +2,21 @@ import hashlib
 import json
 from datetime import date, time, timedelta
 from functools import wraps
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView
 from django.db import IntegrityError, transaction
-from django.db.models import Max
+from django.db.models import Max, Q
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from .models import Allocation, Block, LoginAttempt, Note, Session, Task
+from .models import Allocation, Block, BlockTemplate, LoginAttempt, Note, Session, Task
+from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_template
 from .services import (
     Conflict,
     block_bounds,
@@ -21,8 +24,10 @@ from .services import (
     complete,
     instant,
     local_day,
+    next_focus,
     plan,
     preferences,
+    resize_session,
     serialize_block,
     serialize_session,
     settle,
@@ -48,13 +53,21 @@ def api(methods):
                 with transaction.atomic():
                     prefs = preferences(request.user)
                     now = timezone.now()
+                    today = local_day(prefs, now)
+                    freeze_elapsed(request.user, prefs, today)
+                    materialize(request.user, today, today + timedelta(days=1), today)
                     active = settle(request.user, prefs, now)
                     return fn(request, data, prefs, now, active, *args, **kwargs)
             except Conflict as error:
                 return JsonResponse({"error": str(error)}, status=409)
             except (ValueError, TypeError, KeyError, ZoneInfoNotFoundError) as error:
                 return JsonResponse({"error": str(error) or "Invalid input."}, status=400)
-            except (Task.DoesNotExist, Session.DoesNotExist, Block.DoesNotExist):
+            except (
+                Task.DoesNotExist,
+                Session.DoesNotExist,
+                Block.DoesNotExist,
+                BlockTemplate.DoesNotExist,
+            ):
                 return JsonResponse({"error": "Item not found."}, status=404)
             except IntegrityError:
                 return JsonResponse(
@@ -151,6 +164,16 @@ def health(request):
     return HttpResponse("ok", content_type="text/plain")
 
 
+@require_GET
+def service_worker(request):
+    response = HttpResponse(
+        (Path(settings.BASE_DIR) / "static" / "sw.js").read_text(),
+        content_type="application/javascript",
+    )
+    response["Cache-Control"] = "no-cache"
+    return response
+
+
 def day_data(user, prefs, day, now, sessions=None, blocks=None):
     sessions = (
         list(
@@ -161,7 +184,9 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None):
         if sessions is None
         else sessions
     )
-    blocks = list(Block.objects.filter(user=user, date=day)) if blocks is None else blocks
+    if blocks is None:
+        materialize(user, day, day, local_day(prefs, now))
+        blocks = list(Block.objects.filter(user=user, date=day, deleted=False))
     return {
         "date": day.isoformat(),
         "sessions": [serialize_session(s, now) for s in sessions],
@@ -190,12 +215,19 @@ def state(request, data, prefs, now, active):
         )
     )
     live_block = None
-    for block in Block.objects.filter(user=request.user, date=local_day(prefs, now)):
+    for block in Block.objects.filter(user=request.user, date=local_day(prefs, now), deleted=False):
         start, end = block_bounds(block, prefs)
         if start <= now < end:
             live_block = serialize_block(block, prefs)
             live_block["tracked"] = block.session_set.exclude(status="cancelled").exists()
             break
+    next_seconds, next_block = next_focus(request.user, prefs, now)
+    latest = (
+        Session.objects.filter(user=request.user, date=local_day(prefs, now), status="completed")
+        .prefetch_related("allocations")
+        .order_by("-ended_at")
+        .first()
+    )
     return JsonResponse(
         {
             "now": now.isoformat(),
@@ -211,6 +243,10 @@ def state(request, data, prefs, now, active):
             },
             "tasks": tasks,
             "live_block": live_block,
+            "next_seconds": next_seconds,
+            "next_requested": prefs.next_focus_seconds or prefs.focus_minutes * 60,
+            "next_block": serialize_block(next_block, prefs) if next_block else None,
+            "last_completed": serialize_session(latest, now) if latest else None,
             "active": serialize_session(active, now) if active else None,
             "break_until": rest.break_until.isoformat() if rest else None,
             "pending": [serialize_session(s, now) for s in pending],
@@ -222,14 +258,25 @@ def state(request, data, prefs, now, active):
 @api(["GET"])
 def history(request, data, prefs, now, active):
     start = parse_day(request.GET.get("start", local_day(prefs, now).isoformat()))
-    end = start + timedelta(days=6)
+    end = parse_day(request.GET["end"]) if "end" in request.GET else start + timedelta(days=6)
+    if not 0 <= (end - start).days <= 111:
+        raise ValueError("Load at most 112 days at a time.")
+    materialize(request.user, start, end, local_day(prefs, now))
     sessions = list(
         Session.objects.filter(user=request.user, date__range=(start, end))
         .exclude(status="cancelled")
         .prefetch_related("allocations")
     )
-    blocks = list(Block.objects.filter(user=request.user, date__range=(start, end)))
-    days = [start + timedelta(days=i) for i in range(7)]
+    blocks = list(Block.objects.filter(user=request.user, date__range=(start, end), deleted=False))
+    days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    note_rows = list(
+        Note.objects.filter(user=request.user, date__range=(start.replace(day=1), end))
+    )
+    period_summaries = {}
+    for session in sessions:
+        for period in ["week", "month"]:
+            key = f"{period}:{period_date(period, session.date)}"
+            period_summaries.setdefault(key, []).append(session)
     return JsonResponse(
         {
             "days": [
@@ -244,6 +291,8 @@ def history(request, data, prefs, now, active):
                 for day in days
             ],
             "summary": summary(sessions),
+            "notes": {f"{n.period}:{n.date}": n.text for n in note_rows},
+            "period_summaries": {key: summary(rows) for key, rows in period_summaries.items()},
             "previous": (start - timedelta(days=7)).isoformat(),
             "next": (end + timedelta(days=1)).isoformat(),
         }
@@ -289,14 +338,38 @@ def task_update(request, data, prefs, now, active, pk):
 @api(["POST"])
 def timer(request, data, prefs, now, active):
     action = data.get("action")
+    if action == "set_next":
+        prefs.next_focus_seconds = integer(data, "seconds", 1, 7200)
+        prefs.save(update_fields=["next_focus_seconds"])
+        return JsonResponse({"ok": True})
     if action == "start":
         block_id = data.get("block_id")
         if block_id is not None:
             block_id = integer(data, "block_id", 1, 2**53 - 1)
-        session = start_session(request.user, prefs, now, block_id)
+        if type(data.get("ignore_break", False)) is not bool:
+            raise ValueError("Invalid break option.")
+        session = start_session(request.user, prefs, now, block_id, data.get("ignore_break", False))
         return JsonResponse({"id": session.id}, status=201)
     if action == "skip_break":
         Session.objects.filter(user=request.user, break_until__gt=now).update(break_until=now)
+        return JsonResponse({"ok": True})
+    if action in ["resize", "overrun"]:
+        pk = integer(data, "id", 1, 2**53 - 1)
+        session = Session.objects.get(user=request.user, id=pk)
+        if active and active.id != pk:
+            raise Conflict("A different timer is active.")
+        if session.status not in ["running", "paused", "completed"]:
+            raise Conflict("This timer cannot be extended.")
+        if action == "overrun":
+            remaining = (
+                max(0, int((session.deadline - now).total_seconds()))
+                if session.status == "running"
+                else session.remaining_seconds
+            )
+            seconds = remaining + 300
+        else:
+            seconds = integer(data, "seconds", 1, 43200)
+        resize_session(session, request.user, prefs, now, seconds, action == "overrun")
         return JsonResponse({"ok": True})
     if (
         not active
@@ -340,7 +413,6 @@ def timer(request, data, prefs, now, active):
 @api(["POST"])
 def review(request, data, prefs, now, active, pk):
     session = Session.objects.get(id=pk, user=request.user, status="completed")
-    effort = integer(data, "effort", 0, 5)
     reflection = text(data, "reflection", 2000)
     splits = data.get("allocations")
     if not isinstance(splits, list) or not 1 <= len(splits) <= 10:
@@ -349,7 +421,7 @@ def review(request, data, prefs, now, active, pk):
     for split in splits:
         if not isinstance(split, dict):
             raise ValueError("Invalid task allocation.")
-        percent = integer(split, "percent", 1, 100)
+        sand = integer(split, "sand", 0, 5)
         task = (
             Task.objects.get(user=request.user, id=integer(split, "task_id", 1, 2**53 - 1))
             if split.get("task_id") is not None
@@ -358,9 +430,10 @@ def review(request, data, prefs, now, active, pk):
         label = text(split, "label", 200)
         if not label:
             label = task.title if task else "Open focus"
-        allocations.append(Allocation(session=session, task=task, label=label, percent=percent))
-    if sum(a.percent for a in allocations) != 100:
-        raise ValueError("Task percentages must add up to 100%.")
+        allocations.append(Allocation(session=session, task=task, label=label, sand=sand))
+    effort = sum(a.sand for a in allocations)
+    if effort > 5:
+        raise ValueError("Use up to five sand in total.")
     session.allocations.all().delete()
     Allocation.objects.bulk_create(allocations)
     session.effort, session.reflection, session.reviewed = effort, reflection, True
@@ -371,19 +444,28 @@ def review(request, data, prefs, now, active, pk):
 
 @api(["POST"])
 def block_save(request, data, prefs, now, active, pk=None):
-    block = Block.objects.get(id=pk, user=request.user) if pk else Block(user=request.user)
+    block = (
+        Block.objects.get(id=pk, user=request.user, deleted=False)
+        if pk
+        else Block(user=request.user)
+    )
     if pk and block.session_set.exclude(status="cancelled").exists():
         raise Conflict("A tracked meeting cannot be rescheduled or deleted.")
     if data.get("action") == "delete":
         if not pk:
             raise ValueError("Choose a block to delete.")
-        block.delete()
+        if block.template_id:
+            block.deleted, block.fixed = True, True
+            block.save(update_fields=["deleted", "fixed"])
+        else:
+            block.delete()
         return JsonResponse({"ok": True})
     block.date = parse_day(data["date"])
     block.timezone = prefs.timezone
     block.start, block.end = clock(data["start"]), clock(data["end"])
     block.kind = data.get("kind")
     block.title = text(data, "title", 200)
+    block.fixed = True
     if block.kind not in ["meeting", "break"] or not block.title:
         raise ValueError("Choose a meeting or break and give it a name.")
     if block.start >= block.end:
@@ -391,13 +473,17 @@ def block_save(request, data, prefs, now, active, pk=None):
     start, end = block_bounds(block, prefs)
     if end - start > timedelta(hours=12):
         raise ValueError("Blocks can be at most 12 hours long.")
+    materialize(request.user, block.date, block.date, local_day(prefs, now))
     check_room(request.user, prefs, start, end, pk)
     sessions = (
         Session.objects.filter(user=request.user)
         .exclude(status="cancelled")
         .filter(started_at__lt=end)
     )
-    for session in sessions.filter(date__gte=block.date - timedelta(days=1), date__lte=block.date):
+    for session in sessions.filter(
+        Q(status__in=["running", "paused"])
+        | Q(date__gte=block.date - timedelta(days=1), date__lte=block.date)
+    ):
         session_end = session.ended_at or (
             now + timedelta(seconds=session.remaining_seconds)
             if session.status == "paused"
@@ -406,7 +492,83 @@ def block_save(request, data, prefs, now, active, pk=None):
         if session_end > start:
             raise Conflict("This block overlaps a tracked or active session.")
     block.save()
+    if data.get("repeat") and not pk:
+        repeat = data["repeat"]
+        if not isinstance(repeat, dict):
+            raise ValueError("Invalid repeat schedule.")
+        template = BlockTemplate(
+            user=request.user,
+            title=block.title,
+            kind=block.kind,
+            timezone=block.timezone,
+            start=block.start,
+            end=block.end,
+            weekday=block.date.weekday(),
+            interval_weeks=integer(repeat, "interval_weeks", 1, 12),
+            anchor_date=block.date,
+            effective_from=max(block.date, local_day(prefs, now) + timedelta(days=1)),
+        )
+        validate_template(template, local_day(prefs, now), block.id)
+        template.save()
+        block.template, block.occurrence_date = template, block.date
+        block.fixed = block.date <= local_day(prefs, now)
+        block.save()
     return JsonResponse({"id": block.id})
+
+
+@api(["GET", "POST"])
+def recurrences(request, data, prefs, now, active, pk=None):
+    today = local_day(prefs, now)
+    if request.method == "POST":
+        template = BlockTemplate.objects.get(user=request.user, id=pk)
+        if data.get("action") == "delete":
+            template.active = False
+            template.save(update_fields=["active"])
+            rebuild_future(template, today)
+        else:
+            template.title = text(data, "title", 200)
+            template.kind = data["kind"]
+            template.start, template.end = clock(data["start"]), clock(data["end"])
+            template.weekday = integer(data, "weekday", 0, 6)
+            template.interval_weeks = integer(data, "interval_weeks", 1, 12)
+            template.anchor_date = parse_day(data["anchor_date"])
+            template.anchor_date += timedelta(
+                days=template.weekday - template.anchor_date.weekday()
+            )
+            template.effective_from = today + timedelta(days=1)
+            if (
+                not template.title
+                or template.kind not in ["meeting", "break"]
+                or template.start >= template.end
+            ):
+                raise ValueError("Choose a title, type, and valid time range.")
+            if (
+                instant(template.anchor_date, template.end, prefs)
+                - instant(template.anchor_date, template.start, prefs)
+            ).total_seconds() > 43200:
+                raise ValueError("Blocks can be at most 12 hours long.")
+            validate_template(template, today)
+            template.save()
+            rebuild_future(template, today)
+    return JsonResponse(
+        {
+            "templates": [
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "kind": t.kind,
+                    "start": str(t.start)[:5],
+                    "end": str(t.end)[:5],
+                    "weekday": t.weekday,
+                    "interval_weeks": t.interval_weeks,
+                    "anchor_date": t.anchor_date.isoformat(),
+                }
+                for t in BlockTemplate.objects.filter(user=request.user, active=True).order_by(
+                    "weekday", "start"
+                )
+            ]
+        }
+    )
 
 
 @api(["GET", "POST"])
@@ -433,7 +595,11 @@ def settings_save(request, data, prefs, now, active):
     if start >= end:
         raise ValueError("Workday end must be after its start.")
     if zone != prefs.timezone and (
-        active or Block.objects.filter(user=request.user, date__gte=local_day(prefs, now)).exists()
+        active
+        or Block.objects.filter(
+            user=request.user, date__gte=local_day(prefs, now), deleted=False
+        ).exists()
+        or BlockTemplate.objects.filter(user=request.user, active=True).exists()
     ):
         raise Conflict("Finish your timer and remove upcoming blocks before changing timezone.")
     prefs.timezone, prefs.day_start, prefs.day_end = zone, start, end

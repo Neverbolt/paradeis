@@ -50,14 +50,10 @@ def complete(session, prefs, now):
     session.status = "completed"
     session.ended_at = end
     session.remaining_seconds = 0
-    count = Session.objects.filter(
-        user=session.user, date=session.date, status="completed", kind="focus"
-    ).count() + (session.kind == "focus")
-    minutes = (
-        prefs.long_break
-        if session.kind == "focus" and count % prefs.long_every == 0
-        else prefs.short_break
+    count = (
+        Session.objects.filter(user=session.user, date=session.date, status="completed").count() + 1
     )
+    minutes = prefs.long_break if count % prefs.long_every == 0 else prefs.short_break
     session.break_until = end + timedelta(minutes=minutes)
     session.save()
     return session
@@ -73,7 +69,7 @@ def settle(user, prefs, now):
 
 def check_room(user, prefs, start, end, ignore_block=None):
     first, last = local_day(prefs, start), local_day(prefs, end)
-    for block in Block.objects.filter(user=user, date__range=(first, last)):
+    for block in Block.objects.filter(user=user, date__range=(first, last), deleted=False):
         if block.id == ignore_block:
             continue
         bs, be = block_bounds(block, prefs)
@@ -83,15 +79,36 @@ def check_room(user, prefs, start, end, ignore_block=None):
             )
 
 
-def start_session(user, prefs, now, block_id=None):
+def next_focus(user, prefs, now, ignore_break=False):
+    requested = prefs.next_focus_seconds or prefs.focus_minutes * 60
+    upcoming = None
+    for block in Block.objects.filter(
+        user=user,
+        deleted=False,
+        date__range=(local_day(prefs, now), local_day(prefs, now) + timedelta(days=1)),
+    ):
+        start, end = block_bounds(block, prefs)
+        if start <= now < end:
+            return 0, block
+        if start > now and (upcoming is None or start < block_bounds(upcoming, prefs)[0]):
+            upcoming = block
+    if upcoming:
+        available = math.floor((block_bounds(upcoming, prefs)[0] - now).total_seconds())
+        requested = min(
+            requested, max(0, available - (0 if ignore_break else prefs.short_break * 60))
+        )
+    return requested, upcoming
+
+
+def start_session(user, prefs, now, block_id=None, ignore_break=False):
     if Session.objects.filter(user=user, status__in=["running", "paused"]).exists():
         raise Conflict("A timer is already active. Refresh to see it.")
     task = user.task_set.filter(done=False, archived=False).first()
     block = None
     kind, title = "focus", task.title if task else "Open focus"
-    seconds = prefs.focus_minutes * 60
+    seconds, upcoming = next_focus(user, prefs, now, ignore_break)
     if block_id:
-        block = Block.objects.get(id=block_id, user=user, kind="meeting")
+        block = Block.objects.get(id=block_id, user=user, kind="meeting", deleted=False)
         start, end = block_bounds(block, prefs)
         if not start <= now < end:
             raise Conflict("Start this meeting during its scheduled time.")
@@ -99,6 +116,8 @@ def start_session(user, prefs, now, block_id=None):
             raise Conflict("This meeting has already been tracked.")
         seconds = math.ceil((end - now).total_seconds())
         kind, title, task = "meeting", block.title, None
+    if seconds < 1:
+        raise Conflict("No focus time available before the reserved block.")
     end = now + timedelta(seconds=seconds)
     if block:
         end = block_bounds(block, prefs)[1]
@@ -117,6 +136,55 @@ def start_session(user, prefs, now, block_id=None):
         planned_seconds=seconds,
     )
     Allocation.objects.create(session=session, task=task, label=title)
+    prefs.next_focus_seconds = None
+    prefs.save(update_fields=["next_focus_seconds"])
+    return session
+
+
+def resize_session(session, user, prefs, now, seconds, overrun=False):
+    """Edit remaining time without losing worked time; reopen a natural completion."""
+    if session.status == "completed":
+        latest = (
+            Session.objects.filter(user=user)
+            .exclude(status="cancelled")
+            .order_by("-started_at")
+            .first()
+        )
+        if (
+            not overrun
+            or latest.id != session.id
+            or session.ended_at != session.deadline
+            or now - session.ended_at > timedelta(hours=1)
+        ):
+            raise Conflict("Only the latest naturally completed timer can overrun.")
+        session.resumed_at = session.ended_at
+        session.status = "running"
+        session.ended_at = None
+        session.break_until = None
+        session.reviewed = False
+    if session.status == "running":
+        session.elapsed_seconds += max(0, int((now - session.resumed_at).total_seconds()))
+        session.resumed_at = now
+    end = now + timedelta(seconds=seconds)
+    check_room(user, prefs, now, end, session.block_id)
+    if session.block_id:
+        block = session.block
+        local_end = end.astimezone(ZoneInfo(block.timezone))
+        if local_end.date() != block.date:
+            raise Conflict("A meeting block must end on the same day.")
+        # Round the reservation up to a minute so it covers the entire timer.
+        reserved_end = datetime.fromtimestamp(
+            math.ceil(local_end.timestamp() / 60) * 60, ZoneInfo(block.timezone)
+        )
+        if reserved_end.date() != block.date:
+            raise Conflict("A meeting block must end on the same day.")
+        check_room(user, prefs, now, reserved_end, block.id)
+        block.end, block.fixed = reserved_end.time().replace(tzinfo=None), True
+        block.save(update_fields=["end", "fixed"])
+    session.deadline = end
+    session.remaining_seconds = seconds
+    session.planned_seconds = session.elapsed_seconds + seconds
+    session.save()
     return session
 
 
@@ -140,9 +208,15 @@ def serialize_session(session, now):
         "elapsed": session.elapsed_seconds,
         "effort": session.effort,
         "reviewed": session.reviewed,
+        "can_overrun": session.status in ["running", "paused"]
+        or (
+            session.status == "completed"
+            and session.ended_at == session.deadline
+            and now - session.ended_at <= timedelta(hours=1)
+        ),
         "reflection": session.reflection,
         "allocations": [
-            {"task_id": a.task_id, "label": a.label, "percent": a.percent}
+            {"task_id": a.task_id, "label": a.label, "sand": a.sand}
             for a in session.allocations.all()
         ],
     }
@@ -159,6 +233,8 @@ def serialize_block(block, prefs):
         "end": end.isoformat(),
         "start_time": str(block.start)[:5],
         "end_time": str(block.end)[:5],
+        "template_id": block.template_id,
+        "fixed": block.fixed,
     }
 
 
@@ -179,7 +255,7 @@ def plan(day, prefs, blocks, sessions, now):
     start = max(instant(day, prefs.day_start, prefs), now)
     stop = instant(day, prefs.day_end, prefs)
     occupied = [block_bounds(b, prefs) for b in blocks]
-    count = sum(s.status == "completed" and s.kind == "focus" for s in sessions)
+    count = sum(s.status == "completed" for s in sessions)
     for session in sessions:
         end = session.ended_at or (
             now + timedelta(seconds=session.remaining_seconds)
@@ -187,24 +263,37 @@ def plan(day, prefs, blocks, sessions, now):
             else session.deadline
         )
         if session.status in ["running", "paused"]:
-            count += session.kind == "focus"
+            count += 1
             minutes = prefs.long_break if count % prefs.long_every == 0 else prefs.short_break
             end += timedelta(minutes=minutes)
         occupied.append((session.started_at, max(end, session.break_until or end)))
     occupied.sort()
     result = []
-    duration = timedelta(minutes=prefs.focus_minutes)
+    first_duration = prefs.next_focus_seconds if day == local_day(prefs, now) else None
 
-    def fill_gap(cursor, limit, count):
-        while cursor + duration <= limit:
+    def fill_gap(cursor, limit, count, reserved=False):
+        nonlocal first_duration
+        while cursor < limit:
+            seconds = min(
+                first_duration or prefs.focus_minutes * 60,
+                int((limit - cursor).total_seconds()) - (prefs.short_break * 60 if reserved else 0),
+            )
+            if seconds < 60:
+                break
+            slot_duration = timedelta(seconds=seconds)
+            if not reserved and slot_duration < timedelta(
+                seconds=first_duration or prefs.focus_minutes * 60
+            ):
+                break
             result.append(
                 {
                     "kind": "focus",
                     "start": cursor.isoformat(),
-                    "end": (cursor + duration).isoformat(),
+                    "end": (cursor + slot_duration).isoformat(),
                 }
             )
-            cursor += duration
+            first_duration = None
+            cursor += slot_duration
             count += 1
             rest = timedelta(
                 minutes=prefs.long_break if count % prefs.long_every == 0 else prefs.short_break
@@ -220,7 +309,7 @@ def plan(day, prefs, blocks, sessions, now):
     for busy_start, busy_end in occupied:
         if busy_end <= start:
             continue
-        count = fill_gap(start, min(busy_start, stop), count)
+        count = fill_gap(start, min(busy_start, stop), count, reserved=True)
         start = max(start, busy_end)
         if start >= stop:
             break

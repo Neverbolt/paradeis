@@ -21,6 +21,7 @@ const errors = [];
 const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (e) => errors.push(e.message));
 let dom;
+const notifications = [];
 
 async function fetchWithCookies(url, options = {}) {
   const target = new URL(url, base).href;
@@ -67,6 +68,17 @@ async function waitFor(check, label) {
     virtualConsole,
     beforeParse(window) {
       window.fetch = fetchWithCookies;
+      window.Notification = class {
+        static permission = "granted";
+        static requestPermission() {
+          return Promise.resolve("granted");
+        }
+        constructor(title, options) {
+          notifications.push({ title, options });
+        }
+        close() {}
+      };
+
       window.confirm = () => true;
       window.prompt = () => null;
       // JSDOM has no native dialog implementation or layout engine.
@@ -98,6 +110,11 @@ async function waitFor(check, label) {
     await waitFor(() => $("task-title").value === "", "create task");
   }
   assert($("task-list").textContent.includes(`Write a proposal ${suffix}`));
+  await click("timer-time");
+  $("duration-input").value = "10";
+  submit("duration-form");
+  await waitFor(() => $("duration-form").hidden, "edit next duration");
+  assert.equal($("timer-time").textContent, "10:00");
   await click("timer-main");
   await waitFor(
     () => $("timer-main").textContent.includes("Pause"),
@@ -113,20 +130,40 @@ async function waitFor(check, label) {
     () => $("timer-main").textContent.includes("Pause"),
     "resume timer",
   );
+  await click("timer-time");
+  $("duration-input").value = "0:01";
+  submit("duration-form");
+  await waitFor(
+    () => $("review-dialog").open,
+    "automatic completion and review",
+  );
+  await waitFor(() => notifications.length === 1, "completion notification");
+  await click("review-overrun");
+  await waitFor(
+    () => !$("review-dialog").open && $("timer-main").textContent === "Pause",
+    "overrun completed session",
+  );
   await click("timer-finish");
   await waitFor(() => $("review-dialog").open, "review after finishing");
-  w.document.querySelector('input[name="effort"][value="4"]').checked = true;
   await click("allocation-add");
   const rows = [...w.document.querySelectorAll(".allocation-row")];
   assert.equal(rows.length, 2);
-  rows[1].querySelector(".allocation-label").value = `Review notes ${suffix}`;
-  $("review-reflection").value = "Made room for the important part.";
+  rows[0].querySelector(".sand-control button:nth-child(3)").click();
+  rows[1].querySelector("input").value = `Review notes ${suffix}`;
+  rows[1].querySelector(".sand-control button:nth-child(1)").click();
+  assert.equal($("allocation-total").textContent, "4 / 5 sand");
+  assert(
+    rows[1].querySelector(".sand-control button:nth-child(3)").disabled,
+    "Five-sand budget enforced",
+  );
+  $("review-reflection").value = "Progress";
   submit("review-form");
   await waitFor(() => !$("review-dialog").open, "save review");
   await waitFor(
-    () => $("header-summary").textContent.includes("sand"),
+    () => $("day-summary").textContent.includes("4 sand"),
     "effort summary",
   );
+  assert.equal(notifications.length, 1, "Notification deduplicated");
   $("day-note").value = `Daily reflection ${suffix}`;
   change("day-note");
   submit("day-note-form");
@@ -135,6 +172,13 @@ async function waitFor(check, label) {
     "save day note",
   );
   await click("block-open");
+  assert.equal(
+    Number($("block-start").value.split(":")[1]) % 5,
+    0,
+    "Block start rounded to five minutes",
+  );
+  $("block-repeat").checked = true;
+  $("block-interval").value = "2";
   $("block-kind").value = "break";
   $("block-name").value = `Lunch ${suffix}`;
   const tomorrow = new Date($("block-date").value + "T12:00:00Z");
@@ -144,34 +188,49 @@ async function waitFor(check, label) {
   $("block-end").value = "13:00";
   submit("block-form");
   await waitFor(() => !$("block-dialog").open, "reserve lunch");
+  await click("recurrences-open");
+  await waitFor(() => $("recurrences-dialog").open, "recurring blocks");
+  assert($("recurrence-list").textContent.includes(`Lunch ${suffix}`));
+  $("recurrences-dialog").close();
   await click("overview-view");
   await waitFor(
-    () => $("week-days").children.length === 7,
-    "seven-day overview",
+    () => w.document.querySelectorAll(".calendar-day").length > 90,
+    "bounded calendar",
   );
-  $("period-note").value = `Weekly reflection ${suffix}`;
-  change("period-note");
-  submit("period-note-form");
+  assert(w.document.querySelectorAll(".calendar-day").length <= 112);
+  assert.equal(w.document.querySelectorAll(".period-group.month").length, 3);
+  for (const group of w.document.querySelectorAll(".period-group.week")) {
+    assert(group.style.gridColumn.includes("span 7"));
+    const day = group.dataset.period.split(":")[1];
+    assert.equal(
+      new Date(`${day}T12:00:00Z`).getUTCDay(),
+      1,
+      "Week starts Monday",
+    );
+  }
+  for (const [period, text] of [
+    ["week", "Weekly"],
+    ["month", "Monthly"],
+  ]) {
+    const group = w.document.querySelector(`.period-group.${period}`);
+    const textarea = group.querySelector("textarea");
+    textarea.value = `${text} reflection ${suffix}`;
+    textarea.dispatchEvent(new w.Event("input", { bubbles: true }));
+    group
+      .querySelector("form")
+      .dispatchEvent(
+        new w.Event("submit", { bubbles: true, cancelable: true }),
+      );
+    await waitFor(
+      () => group.querySelector(".note-actions").textContent.includes("Saved"),
+      `save ${period} note`,
+    );
+  }
+  const before = $("calendar-label").textContent;
+  await click("month-prev");
   await waitFor(
-    () => $("period-note-status").textContent === "Saved",
-    "save weekly note",
-  );
-  await click("note-month-tab");
-  await waitFor(
-    () => $("period-note-label").textContent.includes("Monday"),
-    "month notes",
-  );
-  $("period-note").value = `Monthly reflection ${suffix}`;
-  change("period-note");
-  submit("period-note-form");
-  await waitFor(
-    () => $("period-note-status").textContent === "Saved",
-    "save monthly note",
-  );
-  await click("week-prev");
-  await waitFor(
-    () => !$("week-days").textContent.includes(`Write a proposal ${suffix}`),
-    "previous week",
+    () => $("calendar-label").textContent !== before,
+    "previous month",
   );
   const saved = await (await fetchWithCookies(`${base}/api/state/`)).json();
   assert(
@@ -185,7 +244,7 @@ async function waitFor(check, label) {
   assert.equal(note.text, `Daily reflection ${suffix}`);
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
-    "PASS: login, tasks, timer, pause/resume, split review, block scheduling, seven-day history, and day/week/month notes.",
+    "PASS: login, tasks, timer, pause/resume, freeform sand review, overrun, notification, recurring blocks, bounded calendar, and day/week/month notes.",
   );
 })()
   .catch((error) => {
