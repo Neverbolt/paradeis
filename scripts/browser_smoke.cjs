@@ -35,6 +35,10 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator("#task-list .task-check").click();
     await page.waitForSelector("#completed-task-list .checked");
     assert.equal(await page.locator("#task-list .task-row").count(), 0);
+    await page.locator("#overview-view").click();
+    await page.waitForSelector(".completed-result");
+    assert((await page.locator(".completed-result").first().textContent()).includes("Browser task"));
+    await page.locator("#today-view").click();
     await page.locator("#completed-task-list .task-check").click();
     await page.waitForSelector("#task-list .task-check");
     assert.equal(

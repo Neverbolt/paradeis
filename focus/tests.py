@@ -185,6 +185,133 @@ class AppTests(TestCase):
         self.assertEqual(self.post(f"/api/sessions/{session.id}/review/", review).status_code, 400)
         self.assertEqual(list(session.allocations.values_list("sand", flat=True)), [3, 1])
 
+    def test_task_completion_stays_with_local_day_and_pending_tasks_carry_forward(self):
+        pending = Task.objects.create(user=self.user, title="Tomorrow", position=1)
+        late = datetime(2026, 10, 7, 21, 59, tzinfo=timezone.utc)
+        self.assertEqual(self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, late).status_code, 200)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.completed_on, date(2026, 10, 7))
+        with patch("focus.views.timezone.now", return_value=late + timedelta(minutes=2)):
+            today = self.client.get("/api/state/").json()
+            previous = self.client.get("/api/state/?date=2026-10-07").json()
+        self.assertEqual(today["today"], "2026-10-08")
+        self.assertEqual([t["id"] for t in today["tasks"]], [pending.id])
+        self.assertEqual(previous["day"]["completed_tasks"][0]["id"], self.task.id)
+        self.assertEqual(set(t["id"] for t in previous["tasks"]), {self.task.id, pending.id})
+        self.assertEqual(Task.objects.filter(user=self.user).count(), 2)
+        history = self.client.get("/api/history/?start=2026-10-07&end=2026-10-08").json()
+        self.assertEqual(len(history["days"][0]["completed_tasks"]), 1)
+        self.assertEqual(history["days"][1]["completed_tasks"], [])
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "archive"})
+        history = self.client.get("/api/history/?start=2026-10-07&end=2026-10-08").json()
+        self.assertEqual(history["days"][0]["completed_tasks"][0]["id"], self.task.id)
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get("/api/state/").json()["day"]["completed_tasks"], [])
+
+    def test_day_reset_setting_is_saved_and_invalid_times_are_rejected(self):
+        data = dict(timezone="Europe/Brussels", day_start="09:00", day_end="17:00",
+                    day_rollover="04:00", focus_minutes=25, short_break=5,
+                    long_break=15, long_every=4)
+        self.assertEqual(self.post("/api/settings/", data).status_code, 200)
+        self.prefs.refresh_from_db()
+        self.assertEqual(self.prefs.day_rollover, time(4))
+        self.assertEqual(self.client.get("/api/state/").json()["preferences"]["day_rollover"], "04:00")
+        data["day_rollover"] = "25:00"
+        self.assertEqual(self.post("/api/settings/", data).status_code, 400)
+        self.prefs.refresh_from_db()
+        self.assertEqual(self.prefs.day_rollover, time(4))
+
+    def test_configured_day_boundary_preserves_completions_until_four(self):
+        self.prefs.day_rollover = time(4)
+        self.prefs.save()
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"})
+        night = datetime(2026, 10, 8, 1, 59, tzinfo=timezone.utc)  # 03:59 Brussels
+        with patch("focus.views.timezone.now", return_value=night):
+            state = self.client.get("/api/state/").json()
+        self.assertEqual(state["today"], "2026-10-07")
+        self.assertEqual(state["preferences"]["day_rollover"], "04:00")
+        self.assertEqual(state["tasks"][0]["completed_on"], "2026-10-07")
+        session = self.start(at=night)
+        self.assertEqual(session.date, date(2026, 10, 7))
+        self.finish(session, night + timedelta(minutes=1))
+        with patch("focus.views.timezone.now", return_value=night + timedelta(minutes=1)):
+            state = self.client.get("/api/state/").json()
+        self.assertEqual(state["today"], "2026-10-08")
+        self.assertEqual(state["tasks"], [])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.completed_on, date(2026, 10, 7))
+        # Changing the cutoff does not rewrite stored completion dates.
+        self.prefs.day_rollover = time(0)
+        self.prefs.save()
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.completed_on, date(2026, 10, 7))
+
+    def test_early_morning_blocks_remain_real_reservations_with_late_rollover(self):
+        self.prefs.day_rollover = time(4)
+        self.prefs.save()
+        block = self.block(start=time(1), end=time(2), day=date(2026, 10, 8))
+        night = datetime(2026, 10, 7, 23, 30, tzinfo=timezone.utc)  # 01:30 Oct 8
+        with patch("focus.views.timezone.now", return_value=night):
+            state = self.client.get("/api/state/").json()
+        self.assertEqual(state["today"], "2026-10-07")
+        self.assertEqual(state["live_block"]["id"], block.id)
+        self.assertEqual(state["day"]["blocks"][0]["date"], "2026-10-08")
+        self.assertEqual(self.post("/api/timer/", {"action": "start"}, night).status_code, 409)
+        session = self.start(at=night, block_id=block.id)
+        self.assertEqual(session.date, date(2026, 10, 7))
+        with patch("focus.views.timezone.now", return_value=night):
+            history = self.client.get("/api/history/?start=2026-10-07&end=2026-10-08").json()
+        self.assertEqual(history["days"][0]["sessions"][0]["id"], session.id)
+        self.assertEqual(history["days"][1]["blocks"], [])
+
+    def test_day_boundary_handles_dst_without_day_going_backwards(self):
+        from .services import local_day
+        self.prefs.day_rollover = time(2, 30)
+        # Brussels repeats 02:00–03:00 on Oct 25; the first cutoff wins.
+        for value in [datetime(2026, 10, 25, 0, 35, tzinfo=timezone.utc),
+                      datetime(2026, 10, 25, 1, 15, tzinfo=timezone.utc)]:
+            self.assertEqual(local_day(self.prefs, value), date(2026, 10, 25))
+        # A nonexistent 02:30 spring cutoff advances when the clock jumps to 03:00.
+        self.assertEqual(local_day(self.prefs, datetime(2026, 3, 29, 0, 59, tzinfo=timezone.utc)),
+                         date(2026, 3, 28))
+        self.assertEqual(local_day(self.prefs, datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc)),
+                         date(2026, 3, 29))
+
+    def test_reopening_clears_completion_and_redo_uses_new_day(self):
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"})
+        tomorrow = NOW + timedelta(days=1)
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, tomorrow)
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.done)
+        self.assertIsNone(self.task.completed_on)
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, tomorrow)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.completed_on, date(2026, 10, 8))
+
+    def test_undated_tasks_are_retained_and_can_be_attached_explicitly(self):
+        self.task.done = True
+        self.task.save()
+        self.assertIsNone(self.client.get("/api/state/").json()["tasks"][0]["completed_on"])
+        self.assertEqual(self.client.get("/api/state/").json()["day"]["completed_tasks"], [])
+        url = f"/api/tasks/{self.task.id}/"
+        self.assertEqual(self.post(url, {"action": "date_completed", "date": "2026-10-08"}).status_code, 400)
+        self.client.force_login(self.other)
+        self.assertEqual(self.post(url, {"action": "date_completed", "date": "2026-10-06"}).status_code, 404)
+        self.client.force_login(self.user)
+        self.assertEqual(self.post(url, {"action": "date_completed", "date": "2026-10-06"}).status_code, 200)
+        self.assertEqual(self.post(url, {"action": "date_completed", "date": "2026-10-07"}).status_code, 400)
+        history = self.client.get("/api/history/?start=2026-10-06&end=2026-10-07").json()
+        self.assertEqual(history["days"][0]["completed_tasks"][0]["title"], self.task.title)
+        self.assertEqual(history["days"][1]["completed_tasks"], [])
+
+    def test_completed_history_does_not_use_up_pending_task_limit(self):
+        self.task.done = True
+        self.task.completed_on = date(2026, 10, 6)
+        self.task.save()
+        Task.objects.bulk_create([Task(user=self.user, title=str(i), done=True,
+                                      completed_on=date(2026, 10, 6)) for i in range(200)])
+        self.assertEqual(self.post("/api/tasks/", {"title": "Next task"}).status_code, 201)
+
     def test_task_snapshots_survive_rename_archive_and_reorder(self):
         second = Task.objects.create(user=self.user, title="Second", position=1)
         self.post(f"/api/tasks/{second.id}/", {"action": "first"})
