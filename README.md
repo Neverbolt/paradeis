@@ -2,7 +2,7 @@
 
 A quiet pomodoro workspace for seeing **time, tasks, and effort** together.
 
-Paradeis pairs a compact timer and task queue with a day timeline. Navigation lives in a sidebar. The horizontal calendar keeps daily notes below each timeline, Monday-based weekly notes across seven days, and monthly notes across the entire month. Wide summary editors stay within the viewport until the next period takes their place.
+Paradeis pairs a compact timer and task queue with a day timeline. The logo, view switches, and workspace controls form a slim vertical toolbar, with labels on hover or keyboard focus. The horizontal calendar keeps daily notes below each timeline, Monday-based weekly notes across seven days, and monthly notes across the entire month. Wide summary editors stay within the viewport until the next period takes their place.
 
 ## What it does
 

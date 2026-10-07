@@ -168,44 +168,82 @@ select:focus {
 }
 .workspace {
   display: grid;
-  grid-template-columns: 162px minmax(0, 1fr);
+  grid-template-columns: 64px minmax(0, 1fr);
   min-height: 100dvh;
 }
 .sidebar {
   position: sticky;
   top: 0;
   height: 100dvh;
-  padding: 22px 14px;
+  padding: 20px 0;
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
-  gap: 26px;
-  background: #f0f1e9;
+  align-items: center;
+  gap: 22px;
+  background: var(--paper);
+  z-index: 2;
+}
+.sidebar .wordmark {
+  justify-content: center;
 }
 .sidebar nav,
-.sidebar-bottom {
+.rail-tools {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-}
-.sidebar button {
-  text-align: left;
-  padding: 8px 9px;
-  font-size: 12px;
-  display: flex;
   align-items: center;
   gap: 8px;
 }
-.sidebar button.selected {
+.rail-tools {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.rail-control {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 9px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+.rail-control svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.rail-control.selected {
   background: #e0e7d8;
   color: #425a39;
 }
-.sidebar-bottom {
-  margin-top: auto;
+#notifications-toggle[aria-pressed="true"] {
+  color: var(--green);
 }
-.sidebar-bottom > span {
-  font-size: 9px;
-  padding: 8px;
+.rail-tooltip {
+  position: absolute;
+  left: calc(100% + 9px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: var(--ink);
+  color: white;
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.rail-control:hover .rail-tooltip,
+.rail-control:focus-visible .rail-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 .main-content {
   padding: 22px 28px;
@@ -850,20 +888,6 @@ dialog::backdrop {
   }
 }
 @media (max-width: 1000px) {
-  .workspace {
-    grid-template-columns: 126px minmax(0, 1fr);
-  }
-  .sidebar {
-    padding: 20px 9px;
-  }
-  .sidebar .wordmark {
-    font-size: 17px;
-    gap: 5px;
-  }
-  .sidebar button {
-    font-size: 11px;
-    padding: 8px 5px;
-  }
   .main-content {
     padding: 18px;
   }
@@ -887,23 +911,8 @@ dialog::backdrop {
     grid-template-columns: 52px minmax(0, 1fr);
   }
   .sidebar {
-    padding: 16px 6px;
-    align-items: center;
-  }
-  .sidebar .wordmark > span:last-child {
-    display: none;
-  }
-  .sidebar button {
-    font-size: 0;
-    justify-content: center;
-    padding: 8px;
-    gap: 0;
-  }
-  .sidebar button > span {
-    font-size: 20px;
-  }
-  .sidebar-bottom > span {
-    display: none;
+    padding: 16px 0;
+    gap: 18px;
   }
   .main-content {
     padding: 13px;
