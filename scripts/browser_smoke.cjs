@@ -45,6 +45,20 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator("#completed-task-list .task-row").count(),
       0,
     );
+    await page.locator("#task-title").fill("Second browser task");
+    await page.locator("#task-form button").click();
+    await waitFor(() => document.querySelectorAll("#task-list .task-row").length === 2);
+    await Promise.all([
+      page.waitForResponse(r => r.url().endsWith("/api/tasks/reorder/") && r.status() === 200),
+      page.locator("#task-list .task-handle").nth(1).dragTo(
+        page.locator("#task-list .task-row").first(), {targetPosition: {x: 15, y: 3}}),
+    ]);
+    await waitFor(() => document.querySelector("#task-list .task-title").value === "Second browser task");
+    await page.reload();
+    await page.waitForSelector("#task-list .task-row");
+    assert.equal(await page.locator("#task-list .task-title").first().inputValue(), "Second browser task");
+    await page.locator("#task-list .task-up").nth(1).click();
+    await waitFor(() => document.querySelector("#task-list .task-title").value === "Browser task");
     await page.locator("#overview-view").click();
     await page.waitForURL(base + "/overview");
     await page.waitForSelector(".calendar-day");

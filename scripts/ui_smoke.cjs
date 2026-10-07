@@ -162,6 +162,13 @@ async function waitFor(check, label) {
     () => $("completed-task-list").children.length === 0,
     "reopen task",
   );
+  $("task-list").querySelector(".task-down").click();
+  await waitFor(() => $("task-list").querySelector(".task-title").value.startsWith("Review notes"), "move task down");
+  await waitFor(() => w.document.activeElement.className === "task-handle", "focus after reorder");
+  await w.refresh();
+  assert($("task-list").querySelector(".task-title").value.startsWith("Review notes"));
+  $("task-list").children[1].querySelector('[aria-label="Move to top"]').click();
+  await waitFor(() => $("task-list").querySelector(".task-title").value.startsWith("Updated proposal"), "move task to top");
   await click("settings-open");
   $("tab-title-mode").value = "completion";
   $("tab-title-mode").dispatchEvent(new w.Event("change"));

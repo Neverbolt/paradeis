@@ -231,7 +231,38 @@ function renderDay() {
   }
   loadDayNote().catch(showError);
 }
+let draggedTask = null;
+async function reorderTasks(ids, focusId = null, control = ".task-handle") {
+  if (busy) return;
+  busy = true;
+  try {
+    await api("tasks/reorder/", { ids });
+  } catch (error) {
+    showError(error);
+  } finally {
+    try {
+      await refresh();
+      if (focusId) {
+        const row = $("task-list").querySelector(`[data-task-id="${focusId}"]`);
+        const target = row?.querySelector(control);
+        (target?.disabled ? row.querySelector(".task-handle") : target)?.focus();
+      }
+    } catch (error) {
+      showError(error);
+    }
+    busy = false;
+    tick();
+  }
+}
+function moveTask(id, offset, control) {
+  const ids = state.tasks.filter(t => !t.done).map(t => t.id);
+  const index = ids.indexOf(id), target = index + offset;
+  if (index < 0 || target < 0 || target >= ids.length) return;
+  [ids[index], ids[target]] = [ids[target], ids[index]];
+  reorderTasks(ids, id, control);
+}
 function renderTasks() {
+  if (draggedTask !== null) return;
   $("task-count").textContent = state.tasks.filter((t) => !t.done).length;
   const list = $("task-list");
   // A server refresh must not replace the input being edited.
@@ -244,7 +275,8 @@ function renderTasks() {
     return;
   list.replaceChildren();
   completed.replaceChildren();
-  const first = state.tasks.find((t) => !t.done);
+  const pending = state.tasks.filter(t => !t.done);
+  const first = pending[0];
   const ordered = [...state.tasks].sort((a, b) =>
     Number(a.done && !a.completed_on) - Number(b.done && !b.completed_on));
   let undatedHeading = false;
@@ -254,6 +286,43 @@ function renderTasks() {
       undatedHeading = true;
     }
     const row = el("div", `task-row${t.done ? " completed" : ""}`);
+    row.dataset.taskId = t.id;
+    if (!t.done) {
+      const handle = button("⠿", "task-handle", () => {}, `Drag to reorder ${t.title}`);
+      handle.draggable = true;
+      handle.ondragstart = e => {
+        if (busy || pending.length < 2) { e.preventDefault(); return; }
+        draggedTask = t.id;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(t.id));
+        row.classList.add("dragging");
+      };
+      handle.ondragend = () => {
+        draggedTask = null;
+        if (!busy) renderTasks();
+      };
+      row.ondragover = e => {
+        if (draggedTask === null || busy) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        const moving = list.querySelector(`[data-task-id="${draggedTask}"]`);
+        if (moving && moving !== row) {
+          const bounds = row.getBoundingClientRect();
+          list.insertBefore(moving, e.clientY < bounds.top + bounds.height / 2
+            ? row : row.nextSibling);
+        }
+      };
+      row.ondrop = e => {
+        if (draggedTask === null || busy) return;
+        e.preventDefault();
+        const id = draggedTask;
+        const ids = [...list.children].map(r => Number(r.dataset.taskId));
+        draggedTask = null;
+        list.querySelector(".dragging")?.classList.remove("dragging");
+        reorderTasks(ids, id);
+      };
+      row.append(handle);
+    }
     const input = el("input", "task-title");
     input.value = taskDrafts.get(t.id) ?? t.title;
     input.maxLength = 200;
@@ -304,10 +373,18 @@ function renderTasks() {
       actions.append(button("↳", "", () => mutate(`tasks/${t.id}/`,
         {action: "date_completed", date: selectedDay}),
         `Attach ${t.title} to ${selectedDay}`));
+    if (!t.done) {
+      const index = pending.findIndex(task => task.id === t.id);
+      const up = button("↑", "task-up", () => moveTask(t.id, -1, ".task-up"), `Move ${t.title} up`);
+      const down = button("↓", "task-down", () => moveTask(t.id, 1, ".task-down"), `Move ${t.title} down`);
+      up.disabled = index === 0;
+      down.disabled = index === pending.length - 1;
+      actions.append(up, down);
+    }
     if (!t.done && t.id !== first?.id)
       actions.append(
         button(
-          "↑",
+          "⇈",
           "",
           () => mutate(`tasks/${t.id}/`, { action: "first" }),
           "Move to top",
