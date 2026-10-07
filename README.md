@@ -2,16 +2,17 @@
 
 A quiet pomodoro workspace for seeing **time, tasks, and effort** together.
 
-Paradeis pairs a large timer and a lightweight intention list with a day timeline. Reserve meetings and lunch, focus in the gaps, then use the break to notice what happened. The week view puts seven day timelines side by side, with daily, weekly, and monthly reflections.
+Paradeis pairs a compact timer and task queue with a day timeline. Navigation lives in a sidebar. The horizontal calendar keeps daily notes below each timeline, Monday-based weekly notes across seven days, and monthly notes across the entire month. Wide summary editors stay within the viewport until the next period takes their place.
 
 ## What it does
 
-- **Focus timer:** 25/5 by default, with a 15-minute break every four focus sessions. All durations and workday hours are configurable. Start, pause, resume, finish early, or discard. The first unfinished task is captured when a session starts.
-- **Day planner:** reserve meeting and break blocks. Full pomodoros are projected into free gaps; short unusable gaps are left open. Planned time never counts as completed work. Start a meeting during its reserved time to track the remaining block as one uninterrupted session.
-- **Break-time reviews:** revise the task after a session, split it across up to ten tasks with percentages, add a short reflection, and rate effort from **0–5 sand**. Zero effort and unrated are distinct. Task names are snapshotted so later renames don't rewrite history.
-- **History:** browse days or horizontally scroll a seven-day overview. Previous/next week navigation fetches only that week, with indexed date-range queries. Completed sessions remain editable.
-- **Reflections:** separate notes for each day, Monday-based week, and calendar month. Notes save explicitly, with unsaved-change prompts.
-- **Private accounts:** host-created users, Django password hashing and validation, database sessions, CSRF protection, login throttling, and user-scoped queries. No analytics, third-party fonts, external scripts, or public signup.
+- **Timers:** 25/5 by default, with a long break every four completed focus or meeting sessions. Click the countdown to edit the next or remaining duration. `+5` extends the current timer; after a natural completion it resumes the same session and counts the intervening time as work.
+- **Reservations:** meetings and breaks reserve time. Starting focus automatically leaves a short break before the next block; the small arrow starts without that buffer. Meetings are one uninterrupted tracked session, with task and effort review afterward. Overrun extends only that meeting occurrence and refuses to overlap another reservation.
+- **Recurring blocks:** repeat every 1–12 weeks on the chosen weekday. Template changes apply from tomorrow. Today's blocks and elapsed days are frozen; editing or deleting an upcoming occurrence fixes that exception, even if the template's time, weekday, or interval changes. Deleting a schedule preserves fixed occurrences. The original occurrence's Monday-based week suppresses a replacement when its weekday changes.
+- **Reviews:** free-form task fields, optional note, and up to five sand tokens shared across the tasks. No percentage splits or required todo selection. Existing reviewed sessions migrate their effort to task tokens without changing the total.
+- **History and notes:** the calendar loads a rolling three-month window, aligned to complete Monday-based weeks, with a 112-day API limit. Horizontal scrolling fetches adjacent windows. Explicit saves and retained drafts keep daily, weekly, and monthly notes editable while navigating.
+- **Notifications:** browser notifications at a running timer's deadline, with a sidebar toggle. Permission is requested when first starting a session. HTTPS and browser permission are required; keep the tab open. Browser suspension, device sleep, and OS notification policies can delay delivery. This does not use server push for closed tabs.
+- **Private accounts:** host-created users, Django password hashing and validation, database sessions, CSRF protection, login throttling, and user-scoped queries. No analytics, external scripts, or public signup.
 
 ## Local testing with Docker
 
@@ -64,7 +65,7 @@ The built-in login limit is 10 attempts per username and 30 per connecting IP in
 
 The `.github/workflows/publish-docker.yaml` workflow builds on every push to `main`, and can also be run manually from the Actions tab on `main`. It follows the publishing pattern in [Neverbolt/year](https://github.com/Neverbolt/year/blob/main/.github/workflows/publish-docker.yaml): authenticate to GHCR with the built-in `GITHUB_TOKEN`, then push a timestamp tag and `latest`. It also publishes `sha-<full commit SHA>` for identifying or rolling back a build.
 
-The workflow runs the backend test suite inside the built image before pushing anything. Concurrent publishing runs are serialized, and `latest` is pushed last. Pull requests and feature branches never update the image watched by production. The initial publish happens after this application and workflow are merged into `main`.
+The workflow runs the backend test suite and a production template/static-file smoke check inside the built image before pushing anything. Static files are collected with `DEBUG=0` so the production manifest exists; production exceptions are logged to container stderr. Concurrent publishing runs are serialized, and `latest` is pushed last. Pull requests and feature branches never update the image watched by production. The initial publish happens after this application and workflow are merged into `main`.
 
 Your existing service can keep using:
 
@@ -79,6 +80,7 @@ paradeis:
 Keep your production environment variables, network/proxy settings, and persistent `/data` volume alongside that configuration. On a successful publish, your Watchtower instance checks for the new `latest` image on its configured 300-second interval. Its mounted `/config.json` must contain GHCR credentials with pull access if the package is private. No additional publishing secret is needed in Actions; the workflow grants `packages: write` to `GITHUB_TOKEN`.
 
 The image runs migrations at startup. Preserve and back up `/data` across replacements. To roll back, select a previous timestamp or SHA tag; database schema changes may also require restoring a compatible backup.
+
 
 ### Account maintenance
 
@@ -106,24 +108,24 @@ Protect the backup: it contains private notes and password hashes. Store backups
 - Pomos and meetings start **manually**. A reserved meeting is a plan until you start tracking it. Meetings cannot pause; finish early if you leave. Finishing a meeting preserves its original reservation until the scheduled end.
 - Pauses do not accrue work time. A resumed pomo must still fit before the next reserved block. Finish early or adjust the block if it no longer fits. A session's timeline spans wall-clock start/end, while its displayed work duration excludes pauses.
 - A timer can run outside the configured workday. Workday hours define the suggested schedule, not a hard restriction on working. Overnight sessions belong to their starting local day. Reserved blocks must begin and end on the same local day.
-- Effort is a subjective whole-session rating, not a productivity score. Task percentages describe how the session was divided; totals count the effort once, not once per task. An unrated session contributes time but no sand until reviewed.
+- Effort is the sum of task sand, capped at five for the entire session. Zero and unreviewed are distinct. An unreviewed session contributes time but no sand.
 - The calendar uses your configured IANA timezone (initially Europe/Brussels). UTC timestamps keep timers correct across daylight saving changes. Nonexistent or ambiguous block times are rejected. Historical blocks preserve their timezone; session day grouping is fixed when started. Changing timezone requires finishing an active timer and removing upcoming reservations first.
-- Week notes belong to Monday. The month reflection in a weekly view belongs to the month containing that Monday, shown beside the editor.
+- Week notes belong to Monday; month notes belong to the first calendar day. Recurring wall times that are nonexistent or ambiguous at a daylight-saving transition skip that occurrence; one-off invalid times are rejected.
 - Tasks are a small persistent queue. Complete, rename, move to the top, or archive them. Archived tasks disappear from the queue but remain in existing session allocations. There are no categories, recurring tasks, or backlog automation yet.
-- Notifications and alarms are not included in this first version. The tab title shows the running countdown, and finishing opens the review when the page is active.
+- The tab title shows the countdown. Completion notifications are deduplicated across tabs; finishing opens the compact review when the page is active.
 
 ## Checks
 
 ```sh
 DEBUG=1 python manage.py test
 DEBUG=1 python manage.py makemigrations --check --dry-run
-DEBUG=1 python manage.py collectstatic --noinput
+DEBUG=0 ALLOWED_HOSTS=localhost SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(64))')" python manage.py collectstatic --noinput
 node --check static/app.js
 ```
 
-The backend suite covers timer recovery, pause accounting, repeat completion, long-break cadence, schedule conflicts, meetings, task snapshots/splits, timezone transitions, bounded history, private notes, authentication, CSRF, rate limiting, and cross-user access. CI also checks production settings and builds the Docker image.
+The backend suite covers timer recovery, pause accounting, repeat completion, long-break cadence, schedule conflicts, meetings, task snapshots and sand totals, recurrence exceptions and freezing, overrun/resize accounting, migration preservation, timezone transitions, bounded history, private notes, authentication, CSRF, rate limiting, and cross-user access. CI also checks production settings and builds the Docker image.
 
-An optional DOM/HTTP smoke test exercises the actual browser JavaScript against a local running server. Install `jsdom` with `npm install --no-save --package-lock=false jsdom@26`, create a fresh disposable account, then run `node scripts/ui_smoke.cjs` with `PARADEIS_TEST_USER` and `PARADEIS_TEST_PASSWORD` in the environment. `PARADEIS_TEST_URL` defaults to `http://127.0.0.1:8000`. This creates test data and checks interactions and persistence; it does not replace visual testing in a browser.
+CI also runs a DOM/HTTP smoke test with the actual application JavaScript against a disposable local server (`python scripts/run_ui_smoke.py`). It mocks browser notification delivery and checks notification requests and deduplication, rather than OS delivery or browser layout. Install `jsdom` with `npm install --no-save --package-lock=false jsdom@26`, create a fresh disposable account, then run `node scripts/ui_smoke.cjs` with `PARADEIS_TEST_USER` and `PARADEIS_TEST_PASSWORD` in the environment. `PARADEIS_TEST_URL` defaults to `http://127.0.0.1:8000`. This creates test data and checks interactions and persistence; it does not replace visual testing in a browser.
 
 ## Structure and extension points
 
@@ -131,6 +133,7 @@ An optional DOM/HTTP smoke test exercises the actual browser JavaScript against 
 paradeis/       Django configuration and URL routing
 focus/models.py Separate tasks, sessions, allocations, reservations, and notes
 focus/services.py Timer accounting and gap-based planning
+focus/recurrence.py Recurring templates, fixed occurrences, and deletion exceptions
 focus/views.py Authenticated JSON endpoints and input validation
 templates/      Login, account settings, and app shell
 static/         Responsive CSS and dependency-free browser UI

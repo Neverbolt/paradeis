@@ -14,6 +14,35 @@ class Preferences(models.Model):
     short_break = models.PositiveSmallIntegerField(default=5)
     long_break = models.PositiveSmallIntegerField(default=15)
     long_every = models.PositiveSmallIntegerField(default=4)
+    next_focus_seconds = models.PositiveIntegerField(null=True, blank=True)
+    frozen_through = models.DateField(null=True, blank=True)
+
+
+class BlockTemplate(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    title = models.CharField(max_length=200)
+    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("break", "Break")])
+    timezone = models.CharField(max_length=64)
+    start = models.TimeField()
+    end = models.TimeField()
+    weekday = models.PositiveSmallIntegerField()
+    interval_weeks = models.PositiveSmallIntegerField(default=1)
+    anchor_date = models.DateField()
+    effective_from = models.DateField()
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["user", "active"])]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(end__gt=models.F("start")), name="template_positive_length"
+            ),
+            models.CheckConstraint(condition=Q(weekday__lte=6), name="template_weekday"),
+            models.CheckConstraint(
+                condition=Q(interval_weeks__gte=1) & Q(interval_weeks__lte=12),
+                name="template_interval",
+            ),
+        ]
 
 
 class Task(models.Model):
@@ -37,14 +66,21 @@ class Block(models.Model):
     end = models.TimeField()
     kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("break", "Break")])
     title = models.CharField(max_length=200)
+    template = models.ForeignKey(BlockTemplate, null=True, blank=True, on_delete=models.SET_NULL)
+    occurrence_date = models.DateField(null=True, blank=True)
+    fixed = models.BooleanField(default=True)
+    deleted = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["date", "start"]
         indexes = [models.Index(fields=["user", "date"])]
         constraints = [
+            models.UniqueConstraint(
+                fields=["template", "occurrence_date"], name="unique_template_occurrence"
+            ),
             models.CheckConstraint(
                 condition=Q(end__gt=models.F("start")), name="block_positive_length"
-            )
+            ),
         ]
 
 
@@ -100,14 +136,12 @@ class Allocation(models.Model):
     session = models.ForeignKey(Session, related_name="allocations", on_delete=models.CASCADE)
     task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL)
     label = models.CharField(max_length=200)  # Snapshot keeps history meaningful after task edits.
-    percent = models.PositiveSmallIntegerField(default=100)
+    sand = models.PositiveSmallIntegerField(default=0)
 
     class Meta:
         ordering = ["id"]
         constraints = [
-            models.CheckConstraint(
-                condition=Q(percent__gte=1) & Q(percent__lte=100), name="allocation_percent_range"
-            )
+            models.CheckConstraint(condition=Q(sand__lte=5), name="allocation_sand_range")
         ]
 
 

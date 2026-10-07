@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
-from django.test import Client, TestCase, override_settings
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 
 from .models import Block, Session, Task
 from .services import block_bounds, instant, plan, preferences
@@ -44,7 +44,8 @@ class AppTests(TestCase):
     def test_authenticated_shell_and_security_headers(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "A little room to focus")
+        self.assertContains(response, 'class="sidebar"')
+        self.assertNotContains(response, "A little room to focus")
         self.assertIn("script-src 'self'", response["Content-Security-Policy"])
         self.assertEqual(response["Cache-Control"], "no-store")
         self.assertEqual(response["X-Frame-Options"], "DENY")
@@ -122,7 +123,9 @@ class AppTests(TestCase):
 
     def test_reservations_prevent_start_and_resume_overlaps(self):
         self.block(start=time(9, 15), end=time(10))
-        self.assertEqual(self.post("/api/timer/", {"action": "start"}).status_code, 409)
+        shortened = self.start()
+        self.assertEqual(shortened.planned_seconds, 600)
+        self.post("/api/timer/", {"action": "cancel", "id": shortened.id})
         Block.objects.all().delete()
         session = self.start()
         self.post("/api/timer/", {"action": "pause", "id": session.id}, NOW + timedelta(minutes=5))
@@ -169,8 +172,8 @@ class AppTests(TestCase):
             "effort": 4,
             "reflection": "Good progress",
             "allocations": [
-                {"task_id": self.task.id, "percent": 70},
-                {"task_id": second.id, "percent": 30},
+                {"task_id": self.task.id, "sand": 3},
+                {"task_id": second.id, "sand": 1},
             ],
         }
         response = self.post(f"/api/sessions/{session.id}/review/", review)
@@ -178,9 +181,9 @@ class AppTests(TestCase):
         state = self.client.get("/api/state/").json()
         self.assertEqual(state["day"]["summary"]["effort"], 4)
         self.assertEqual(len(state["day"]["sessions"][0]["allocations"]), 2)
-        review["allocations"][0]["percent"] = 60
+        review["allocations"][0]["sand"] = 5
         self.assertEqual(self.post(f"/api/sessions/{session.id}/review/", review).status_code, 400)
-        self.assertEqual(list(session.allocations.values_list("percent", flat=True)), [70, 30])
+        self.assertEqual(list(session.allocations.values_list("sand", flat=True)), [3, 1])
 
     def test_task_snapshots_survive_rename_archive_and_reorder(self):
         second = Task.objects.create(user=self.user, title="Second", position=1)
@@ -209,7 +212,7 @@ class AppTests(TestCase):
         self.assertEqual(
             self.post(
                 f"/api/sessions/{session.id}/review/",
-                {"effort": 1, "allocations": [{"task_id": foreign_task.id, "percent": 100}]},
+                {"effort": 1, "allocations": [{"task_id": foreign_task.id, "sand": 1}]},
             ).status_code,
             404,
         )
@@ -284,7 +287,7 @@ class AppTests(TestCase):
         self.finish(session, NOW + timedelta(minutes=1))
         self.post(
             f"/api/sessions/{session.id}/review/",
-            {"effort": 0, "allocations": [{"percent": 100, "label": "Thinking"}]},
+            {"effort": 0, "allocations": [{"sand": 0, "label": "Thinking"}]},
         )
         summary = self.client.get("/api/state/").json()["day"]["summary"]
         self.assertEqual(summary["effort"], 0)
@@ -368,3 +371,323 @@ class AppTests(TestCase):
                 self.client.get("/api/state/")
         session.refresh_from_db()
         self.assertEqual(session.break_until - session.ended_at, timedelta(minutes=15))
+
+    def recurring(self, day="2026-10-09", interval=2):
+        response = self.post(
+            "/api/blocks/",
+            {
+                "date": day,
+                "start": "14:00",
+                "end": "14:30",
+                "kind": "meeting",
+                "title": "Recurring call",
+                "repeat": {"interval_weeks": interval},
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.content)
+        return Block.objects.get(pk=response.json()["id"]).template
+
+    def edit_template(self, template, **changes):
+        data = {
+            "title": "Changed call",
+            "kind": template.kind,
+            "start": "15:00",
+            "end": "15:30",
+            "weekday": template.weekday,
+            "interval_weeks": template.interval_weeks,
+            "anchor_date": template.anchor_date.isoformat(),
+            **changes,
+        }
+        response = self.post(f"/api/recurrences/{template.id}/", data)
+        self.assertEqual(response.status_code, 200, response.content)
+
+    def test_recurrence_interval_and_future_edits_preserve_exceptions(self):
+        t = self.recurring()
+        days = self.client.get("/api/history/?start=2026-10-09&end=2026-11-07").json()["days"]
+        self.assertEqual(
+            [d["date"] for d in days if d["blocks"]], ["2026-10-09", "2026-10-23", "2026-11-06"]
+        )
+        edited = Block.objects.get(template=t, date="2026-10-23")
+        deleted = Block.objects.get(template=t, date="2026-11-06")
+        self.assertEqual(
+            self.post(
+                f"/api/blocks/{edited.id}/",
+                {
+                    "title": "Exception",
+                    "date": "2026-10-24",
+                    "start": "16:00",
+                    "end": "17:00",
+                    "kind": "meeting",
+                },
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.post(f"/api/blocks/{deleted.id}/", {"action": "delete"}).status_code, 200
+        )
+        self.edit_template(t)
+        days = self.client.get("/api/history/?start=2026-10-09&end=2026-11-07").json()["days"]
+        visible = {d["date"]: d["blocks"] for d in days if d["blocks"]}
+        self.assertEqual(set(visible), {"2026-10-09", "2026-10-24"})
+        self.assertEqual(visible["2026-10-09"][0]["start_time"], "15:00")
+        self.assertEqual(visible["2026-10-24"][0]["title"], "Exception")
+        self.assertTrue(Block.objects.get(pk=deleted.id).deleted)
+
+    def test_weekday_change_does_not_recreate_fixed_exception_in_same_week(self):
+        t = self.recurring()
+        b = Block.objects.get(template=t)
+        self.post(f"/api/blocks/{b.id}/", {"action": "delete"})
+        self.edit_template(t, weekday=3)
+        history = self.client.get("/api/history/?start=2026-10-08&end=2026-10-23").json()
+        self.assertEqual([d["date"] for d in history["days"] if d["blocks"]], ["2026-10-22"])
+
+    def test_today_and_unopened_elapsed_occurrences_freeze_before_template_change(self):
+        t = self.recurring("2026-10-07", 1)
+        future_now = NOW + timedelta(days=14)
+        with patch("focus.views.timezone.now", return_value=future_now):
+            self.client.get("/api/state/")
+        self.edit_template(t)
+        fixed = list(
+            Block.objects.filter(template=t, date__lte=date(2026, 10, 21)).order_by("date")
+        )
+        self.assertEqual([b.start for b in fixed], [time(14), time(14), time(14)])
+        self.assertTrue(all(b.fixed for b in fixed))
+
+    def test_recurrence_delete_keeps_today_and_edited_future(self):
+        t = self.recurring("2026-10-07", 1)
+        self.client.get("/api/history/?start=2026-10-07&end=2026-10-28")
+        edited = Block.objects.get(template=t, date="2026-10-14")
+        self.post(
+            f"/api/blocks/{edited.id}/",
+            {
+                "date": "2026-10-14",
+                "start": "16:00",
+                "end": "17:00",
+                "title": "Fixed",
+                "kind": "meeting",
+            },
+        )
+        self.assertEqual(
+            self.post(f"/api/recurrences/{t.id}/", {"action": "delete"}).status_code, 200
+        )
+        self.assertEqual(
+            list(Block.objects.filter(template=t).order_by("date").values_list("date", flat=True)),
+            [date(2026, 10, 7), date(2026, 10, 14)],
+        )
+
+    def test_recurring_conflicts_detected_without_loading_future_days(self):
+        self.recurring()
+        data = {
+            "date": "2026-10-23",
+            "start": "14:15",
+            "end": "15:00",
+            "kind": "break",
+            "title": "Lunch",
+        }
+        self.assertEqual(self.post("/api/blocks/", data).status_code, 409)
+        data.update(date="2026-10-16", repeat={"interval_weeks": 3})
+        self.assertEqual(self.post("/api/blocks/", data).status_code, 409)
+        data["repeat"]["interval_weeks"] = 2
+        self.assertEqual(self.post("/api/blocks/", data).status_code, 200)
+
+    def test_recurrences_are_user_scoped(self):
+        t = self.recurring()
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get("/api/recurrences/").json()["templates"], [])
+        self.assertEqual(
+            self.post(f"/api/recurrences/{t.id}/", {"action": "delete"}).status_code, 404
+        )
+
+    def test_shortened_focus_and_ignore_break_allowance(self):
+        self.block(start=time(9, 20), end=time(10))
+        s = self.start()
+        self.assertEqual(s.planned_seconds, 900)
+        self.post("/api/timer/", {"action": "cancel", "id": s.id})
+        s = self.start(ignore_break=True)
+        self.assertEqual(s.planned_seconds, 1200)
+        self.assertEqual(
+            self.post("/api/timer/", {"action": "overrun", "id": s.id}).status_code, 409
+        )
+
+    def test_next_duration_consumed_once_and_running_resize_keeps_elapsed(self):
+        self.assertEqual(
+            self.post("/api/timer/", {"action": "set_next", "seconds": 600}).status_code, 200
+        )
+        s = self.start()
+        self.assertEqual(s.planned_seconds, 600)
+        self.prefs.refresh_from_db()
+        self.assertIsNone(self.prefs.next_focus_seconds)
+        self.assertEqual(
+            self.post(
+                "/api/timer/",
+                {"action": "resize", "id": s.id, "seconds": 300},
+                NOW + timedelta(minutes=3),
+            ).status_code,
+            200,
+        )
+        s.refresh_from_db()
+        self.assertEqual(s.planned_seconds, 480)
+        self.assertEqual(s.elapsed_seconds, 180)
+        self.assertEqual(s.deadline, NOW + timedelta(minutes=8))
+
+    def test_natural_overrun_counts_gap_as_work_and_reopens_review(self):
+        s = self.start()
+        self.finish(s)
+        self.post(
+            f"/api/sessions/{s.id}/review/",
+            {"allocations": [{"label": "Writing", "sand": 4}]},
+            NOW + timedelta(minutes=25),
+        )
+        self.assertEqual(
+            self.post(
+                "/api/timer/", {"action": "overrun", "id": s.id}, NOW + timedelta(minutes=27)
+            ).status_code,
+            200,
+        )
+        s.refresh_from_db()
+        self.assertEqual(s.status, "running")
+        self.assertFalse(s.reviewed)
+        self.assertEqual(s.elapsed_seconds, 1620)
+        self.assertEqual(s.deadline, NOW + timedelta(minutes=32))
+        self.finish(s, NOW + timedelta(minutes=32))
+        s.refresh_from_db()
+        self.assertEqual(s.elapsed_seconds, 1920)
+
+    def test_meeting_overrun_extends_only_occurrence_and_counts_break_cycle(self):
+        t = self.recurring("2026-10-07", 1)
+        b = Block.objects.get(template=t)
+        at = NOW + timedelta(hours=5)
+        s = self.start(at, block_id=b.id)
+        self.assertEqual(
+            self.post(
+                "/api/timer/", {"action": "overrun", "id": s.id}, at + timedelta(minutes=20)
+            ).status_code,
+            200,
+        )
+        b.refresh_from_db()
+        t.refresh_from_db()
+        self.assertEqual(b.end, time(14, 35))
+        self.assertEqual(t.end, time(14, 30))
+        self.prefs.long_every = 1
+        self.prefs.save()
+        self.finish(s, at + timedelta(minutes=35))
+        s.refresh_from_db()
+        self.assertEqual(s.break_until - s.ended_at, timedelta(minutes=15))
+        self.assertEqual(
+            self.post(
+                f"/api/sessions/{s.id}/review/", {"allocations": [{"label": "Call", "sand": 3}]}
+            ).status_code,
+            200,
+        )
+
+    def test_history_range_limit_and_grouped_notes(self):
+        self.post("/api/notes/", {"period": "week", "date": "2026-10-07", "text": "Week"})
+        self.post("/api/notes/", {"period": "month", "date": "2026-10-07", "text": "Month"})
+        history = self.client.get("/api/history/?start=2026-09-01&end=2026-11-30").json()
+        self.assertEqual(len(history["days"]), 91)
+        self.assertEqual(history["notes"]["week:2026-10-05"], "Week")
+        self.assertEqual(history["notes"]["month:2026-10-01"], "Month")
+        self.assertEqual(
+            self.client.get("/api/history/?start=2026-01-01&end=2026-12-31").status_code, 400
+        )
+
+    def test_recurring_dst_invalid_occurrence_is_skipped(self):
+        from .models import BlockTemplate
+
+        t = BlockTemplate.objects.create(
+            user=self.user,
+            title="Early Sunday",
+            kind="break",
+            timezone="Europe/Brussels",
+            start=time(2, 30),
+            end=time(3, 30),
+            weekday=6,
+            interval_weeks=1,
+            anchor_date=date(2026, 10, 18),
+            effective_from=date(2026, 10, 18),
+        )
+        history = self.client.get("/api/history/?start=2026-10-18&end=2026-11-01")
+        self.assertEqual(history.status_code, 200, history.content)
+        self.assertEqual(
+            list(Block.objects.filter(template=t).order_by("date").values_list("date", flat=True)),
+            [date(2026, 10, 18), date(2026, 11, 1)],
+        )
+
+    def test_paused_resize_preserves_accounting_and_override_matches_plan(self):
+        self.post("/api/timer/", {"action": "set_next", "seconds": 600})
+        state = self.client.get("/api/state/").json()
+        slot = state["day"]["plan"][0]
+        self.assertEqual(
+            datetime.fromisoformat(slot["end"]) - datetime.fromisoformat(slot["start"]),
+            timedelta(minutes=10),
+        )
+        s = self.start()
+        self.post("/api/timer/", {"action": "pause", "id": s.id}, NOW + timedelta(minutes=3))
+        self.post(
+            "/api/timer/",
+            {"action": "resize", "id": s.id, "seconds": 120},
+            NOW + timedelta(minutes=5),
+        )
+        self.post("/api/timer/", {"action": "resume", "id": s.id}, NOW + timedelta(minutes=10))
+        self.finish(s, NOW + timedelta(minutes=12))
+        s.refresh_from_db()
+        self.assertEqual(s.elapsed_seconds, 300)
+
+    def test_overrun_cannot_reopen_manual_completion_or_another_users_timer(self):
+        s = self.start()
+        self.finish(s, NOW + timedelta(minutes=2))
+        self.assertEqual(
+            self.post(
+                "/api/timer/", {"action": "overrun", "id": s.id}, NOW + timedelta(minutes=3)
+            ).status_code,
+            409,
+        )
+        self.client.force_login(self.other)
+        self.assertEqual(
+            self.post("/api/timer/", {"action": "resize", "id": s.id, "seconds": 60}).status_code,
+            404,
+        )
+
+
+class EffortMigrationTests(TransactionTestCase):
+    def test_existing_split_reviews_keep_total_sand_and_labels(self):
+        from django.db import connection
+        from django.db.migrations.executor import MigrationExecutor
+
+        old = [("focus", "0002_alter_preferences_day_end_and_more")]
+        new = [("focus", "0003_blocktemplate_and_more")]
+        executor = MigrationExecutor(connection)
+        executor.migrate(old)
+        try:
+            apps = executor.loader.project_state(old).apps
+            User = apps.get_model("auth", "User")
+            OldSession = apps.get_model("focus", "Session")
+            OldAllocation = apps.get_model("focus", "Allocation")
+            user = User.objects.create(username="migration-user")
+            session = OldSession.objects.create(
+                resumed_at=NOW,
+                user=user,
+                date=NOW.date(),
+                status="completed",
+                started_at=NOW,
+                ended_at=NOW + timedelta(minutes=25),
+                deadline=NOW + timedelta(minutes=25),
+                planned_seconds=1500,
+                remaining_seconds=0,
+                elapsed_seconds=1500,
+                effort=4,
+                reviewed=True,
+            )
+            OldAllocation.objects.create(session=session, label="Proposal", percent=70)
+            OldAllocation.objects.create(session=session, label="Mail", percent=30)
+            executor = MigrationExecutor(connection)
+            executor.migrate(new)
+            session = Session.objects.get(pk=session.pk)
+            self.assertEqual(session.effort, 4)
+            self.assertEqual(
+                list(session.allocations.values_list("label", "sand")),
+                [("Proposal", 3), ("Mail", 1)],
+            )
+            self.assertEqual(session.elapsed_seconds, 1500)
+        finally:
+            MigrationExecutor(connection).migrate(new)

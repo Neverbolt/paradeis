@@ -17,7 +17,14 @@ jobs:
       - run: python manage.py test
       - run: python manage.py makemigrations --check --dry-run
       - run: python manage.py collectstatic --noinput
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - run: node --check static/app.js
+      - name: Test UI interactions against a disposable local server
+        run: |
+          npm install --no-save --package-lock=false jsdom@26
+          python scripts/run_ui_smoke.py
       - name: Check production configuration
         env:
           DEBUG: "0"
@@ -26,3 +33,8 @@ jobs:
         run: python manage.py check --deploy --fail-level WARNING
       - name: Build container
         run: docker build -t paradeis:test .
+      - name: Check production templates and collected assets
+        run: |
+          docker run --rm --env DEBUG=0 --env ALLOWED_HOSTS=localhost \
+            --env SECRET_KEY="$(openssl rand -hex 32)" --entrypoint python \
+            paradeis:test -m scripts.check_production

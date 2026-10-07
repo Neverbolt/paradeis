@@ -1,107 +1,97 @@
 "use strict";
-
 const $ = (id) => document.getElementById(id);
-let state = null;
-let selectedDay = null;
-let weekStart = null;
-let overviewVisible = false;
-let period = "week";
-let weekData = null;
-let serverOffset = 0;
-let reviewing = null;
-let editingBlock = null;
-let requestVersion = 0;
-let historyVersion = 0;
-let noteVersion = 0;
-let dayNoteDirty = false;
-let periodNoteDirty = false;
-let busy = false;
-let lastExpiryRefresh = 0;
-let toastTimeout;
-
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+let state,
+  selectedDay = null,
+  serverOffset = 0,
+  busy = false,
+  overviewVisible = false;
+let reviewing,
+  editingBlock,
+  templates = [],
+  editingTemplate,
+  requestVersion = 0,
+  historyVersion = 0;
+let calendarAnchor,
+  calendarData,
+  loadingCalendar = false,
+  expiryRefresh = 0,
+  toastTimeout;
+const drafts = new Map(),
+  savedNotes = new Map(),
+  notified = new Set();
+const el = (tag, cls = "", text = "") => {
+  const n = document.createElement(tag);
+  n.className = cls;
+  n.textContent = text;
+  return n;
+};
+function button(text, cls, action, label) {
+  const n = el("button", cls, text);
+  n.type = "button";
+  n.onclick = action;
+  if (label) n.setAttribute("aria-label", label);
+  return n;
 }
-function button(text, className, action, label) {
-  const node = el("button", className, text);
-  node.type = "button";
-  if (label) node.setAttribute("aria-label", label);
-  node.addEventListener("click", action);
-  return node;
+function sand(value) {
+  const n = el("span", "sand-pile");
+  n.setAttribute("aria-label", `${value || 0} sand`);
+  for (let i = 0; i < (value || 0); i++) n.append(el("i", "sand-grain"));
+  return n;
 }
-function sandIcon() {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 44 32");
-  svg.setAttribute("class", "sand-icon");
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS(svg.namespaceURI, "path");
-  path.setAttribute(
-    "d",
-    "M1 29 13 11 25 29z M16 29 29 4 43 29z M9 8h2v2H9z M21 3h2v2h-2z M34 1h2v2h-2z",
-  );
-  svg.append(path);
-  return svg;
+const now = () => Date.now() + serverOffset;
+function shiftDay(day, amount) {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + amount);
+  return d.toISOString().slice(0, 10);
 }
-function sand(value, showEmpty = false) {
-  const node = el("span", "sand-pile");
-  node.setAttribute("role", "img");
-  node.setAttribute(
-    "aria-label",
-    value === null ? "Effort not rated" : `${value} sand, effort`,
-  );
-  if (value === null) {
-    node.append(el("span", "small muted", "Rate effort"));
-    return node;
-  }
-  for (let i = 0; i < (showEmpty ? 5 : value); i++)
-    node.append(el("i", `sand-grain${i >= value ? " empty" : ""}`));
-  if (value === 0 && !showEmpty)
-    node.append(el("span", "small muted", "0 sand"));
-  return node;
+function monday(day) {
+  return shiftDay(day, -((new Date(`${day}T12:00:00Z`).getUTCDay() + 6) % 7));
 }
-function now() {
-  return Date.now() + serverOffset;
+function month(day, offset = 0) {
+  const d = new Date(`${day.slice(0, 7)}-01T12:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + offset);
+  return d.toISOString().slice(0, 10);
 }
-function shiftDay(value, amount) {
-  const day = new Date(value + "T12:00:00Z");
-  day.setUTCDate(day.getUTCDate() + amount);
-  return day.toISOString().slice(0, 10);
-}
-function monday(value) {
-  const weekday = new Date(value + "T12:00:00Z").getUTCDay();
-  return shiftDay(value, -((weekday + 6) % 7));
-}
-function dateLabel(value, options = {}) {
-  return new Intl.DateTimeFormat("en-GB", {
+function dateLabel(day, options = {}) {
+  return new Intl.DateTimeFormat(undefined, {
     timeZone: "UTC",
     ...options,
-  }).format(new Date(value + "T12:00:00Z"));
+  }).format(new Date(`${day}T12:00:00Z`));
 }
 function clock(value) {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: state.preferences.timezone,
     hour: "2-digit",
     minute: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   }).format(new Date(value));
 }
-function duration(seconds) {
-  const minutes = Math.round(seconds / 60);
-  return minutes >= 60
-    ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
-    : `${minutes} min`;
+function localDate(value) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: state.preferences.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(value));
+  return ["year", "month", "day"]
+    .map((k) => parts.find((p) => p.type === k).value)
+    .join("-");
+}
+function duration(value) {
+  const seconds = Math.max(0, Math.ceil(value));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+function stats(s) {
+  return `${Math.floor((s?.seconds || 0) / 60)} min · ${s?.count || 0} sessions · ${s?.effort || 0} sand`;
 }
 function csrf() {
-  return document.querySelector("[name=csrfmiddlewaretoken]").value;
+  return document.querySelector('[name="csrfmiddlewaretoken"]').value;
 }
 async function api(path, body) {
   const options = {
     credentials: "same-origin",
-    headers: { Accept: "application/json" },
     cache: "no-store",
+    headers: { Accept: "application/json" },
   };
   if (body !== undefined) {
     options.method = "POST";
@@ -109,17 +99,10 @@ async function api(path, body) {
     options.headers["X-CSRFToken"] = csrf();
     options.body = JSON.stringify(body);
   }
-  let response;
-  try {
-    response = await fetch(`/api/${path}`, options);
-  } catch {
-    throw new Error(
-      "Can't reach Paradeis. Your saved timer is safe. Check your connection and try again.",
-    );
-  }
+  const response = await fetch(`/api/${path}`, options);
   if (response.status === 401) {
-    window.location.assign("/login/?next=/");
-    throw new Error("Please sign in again.");
+    location.assign("/login/?next=/");
+    throw new Error("Sign in again.");
   }
   let data;
   try {
@@ -127,16 +110,17 @@ async function api(path, body) {
   } catch {
     throw new Error(
       response.status === 403
-        ? "Your sign-in token expired. Refresh this page and try again."
-        : "The server could not complete that request. Please try again.",
+        ? "Refresh the page and try again."
+        : "Server error. Please try again.",
     );
   }
-  if (!response.ok)
-    throw new Error(data.error || "Something went wrong. Please try again.");
+  if (!response.ok) throw new Error(data.error || "Request failed.");
   return data;
 }
-function showError(error, dialog = null) {
-  const target = dialog ? dialog.querySelector(".dialog-error") : $("error");
+function showError(error, dialog) {
+  const target = dialog?.open
+    ? dialog.querySelector(".dialog-error")
+    : $("error");
   target.textContent = error.message || String(error);
   target.hidden = false;
 }
@@ -144,155 +128,102 @@ function toast(message) {
   $("toast").textContent = message;
   $("toast").hidden = false;
   clearTimeout(toastTimeout);
-  toastTimeout = setTimeout(() => {
-    $("toast").hidden = true;
-  }, 3000);
+  toastTimeout = setTimeout(() => ($("toast").hidden = true), 2500);
 }
-async function mutate(path, data, success, dialog = null) {
+async function mutate(path, data, dialog) {
   if (busy) return false;
   busy = true;
-  const submits = [...document.querySelectorAll('button[type="submit"]')];
-  submits.forEach((b) => {
-    b.disabled = true;
-  });
   try {
     await api(path, data);
     if (dialog) dialog.close();
     await refresh();
-    if (overviewVisible) await loadWeek();
-    if (success) toast(success);
+    if (overviewVisible) await loadCalendar({ preserve: true });
     return true;
-  } catch (error) {
-    showError(error, dialog?.open ? dialog : null);
+  } catch (e) {
+    showError(e, dialog);
     return false;
   } finally {
     busy = false;
-    submits.forEach((b) => {
-      b.disabled = false;
-    });
     tick();
   }
 }
+function openDialog(dialog) {
+  dialog.querySelectorAll(".dialog-error").forEach((n) => (n.hidden = true));
+  if (!dialog.open) dialog.showModal();
+}
 async function refresh() {
-  const version = ++requestVersion;
-  const previous = state?.active;
+  const version = ++requestVersion,
+    previous = state?.active;
   const data = await api(`state/${selectedDay ? `?date=${selectedDay}` : ""}`);
   if (version !== requestVersion) return;
   state = data;
-  serverOffset = new Date(data.now).getTime() - Date.now();
+  serverOffset = Date.parse(data.now) - Date.now();
   selectedDay = data.day.date;
-  weekStart ||= monday(data.today);
+  calendarAnchor ||= month(data.today);
   $("error").hidden = true;
   renderDay();
   tick();
-  if (previous && !data.active) {
-    const completed = data.pending.find((s) => s.id === previous.id);
-    if (completed && !document.querySelector("dialog[open]"))
-      openReview(completed);
+  clearTimeout(deadlineTimeout);
+  if (data.active?.status === "running") {
+    const session = data.active;
+    deadlineTimeout = setTimeout(
+      () => {
+        notifyEnd(session);
+        refresh().catch(showError);
+      },
+      Math.max(0, Date.parse(session.end) - now()) + 20,
+    );
   }
-}
-function summaryElement(value, caption, icon = false) {
-  const node = el("div");
-  if (icon) node.append(sandIcon());
-  const text = el("div");
-  text.append(
-    el("span", "summary-value", value),
-    el("span", "summary-caption", caption),
-  );
-  node.append(text);
-  return node;
-}
-function renderHeading() {
-  $("page-title").textContent = overviewVisible
-    ? "See the days add up."
-    : "A little room to focus.";
-  $("heading-date").textContent = overviewVisible
-    ? "A WIDER PERSPECTIVE"
-    : dateLabel(selectedDay, {
-        weekday: "long",
-        day: "numeric",
-        month: "long",
-      }).toUpperCase();
-  const summary =
-    overviewVisible && weekData ? weekData.summary : state.day.summary;
-  $("header-summary").replaceChildren(
-    sandIcon(),
-    summaryElement(
-      `${summary.effort} sand`,
-      `${duration(summary.seconds)} · ${summary.count} sessions`,
-    ),
-  );
+  if (previous && !data.active) {
+    notifyEnd(previous);
+    const finished = data.pending.find((s) => s.id === previous.id);
+    if (finished && !document.hidden && !document.querySelector("dialog[open]"))
+      openReview(finished);
+  }
 }
 function renderDay() {
-  renderHeading();
+  $("timezone-label").textContent = state.preferences.timezone;
+  $("timeline-date").textContent = dateLabel(state.day.date, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  $("day-summary").textContent = stats(state.day.summary);
+  renderTimeline($("timeline"), state.day);
   renderTasks();
-  $("day-date").value = selectedDay;
-  $("timeline-date").textContent =
-    `${dateLabel(selectedDay, { weekday: "short", day: "numeric", month: "short" })} · ${state.preferences.day_start}–${state.preferences.day_end}`;
-  $("timezone-label").textContent = state.preferences.timezone.replaceAll(
-    "_",
-    " ",
-  );
-  renderTimeline($("timeline"), state.day, false);
-  const prompt = $("review-prompt");
-  prompt.hidden = !state.pending.length;
-  if (state.pending.length) {
-    const first = state.pending[0];
-    const text = el("div");
-    text.append(
-      el("h3", "", "A moment to notice."),
-      el(
-        "p",
-        "muted",
-        `${state.pending.length === 10 ? "10+" : state.pending.length} session${state.pending.length > 1 ? "s" : ""} to reflect on.`,
-      ),
+  const pending = state.pending[0];
+  $("review-prompt").hidden = !pending;
+  if (pending)
+    $("review-prompt").replaceChildren(
+      el("span", "", `${state.pending.length} to review`),
+      button("Review", "", () => openReview(pending)),
     );
-    prompt.replaceChildren(
-      text,
-      button("Review →", "", () => openReview(first)),
-    );
-  }
+  loadDayNote().catch(showError);
 }
 function renderTasks() {
-  const container = $("task-list");
-  container.replaceChildren();
-  const next = state.tasks.find((t) => !t.done);
   $("task-count").textContent = state.tasks.filter((t) => !t.done).length;
-  if (!state.tasks.length)
-    container.append(
-      el(
-        "p",
-        "empty-tasks",
-        "Start with one intention. You can always add another.",
+  const list = $("task-list");
+  list.replaceChildren();
+  const first = state.tasks.find((t) => !t.done);
+  for (const t of state.tasks) {
+    const row = el("div", `task-row${t.done ? " completed" : ""}`);
+    row.append(
+      button(
+        t.done ? "✓" : "",
+        `task-check${t.done ? " checked" : ""}`,
+        () => mutate(`tasks/${t.id}/`, { action: "toggle" }),
+        `${t.done ? "Reopen" : "Complete"} ${t.title}`,
       ),
+      el("span", "task-title", t.title),
     );
-  for (const task of state.tasks) {
-    const row = el(
-      "div",
-      `task-row${task.done ? " completed" : ""}${task.id === next?.id ? " next" : ""}`,
-    );
-    const toggle = button(
-      task.done ? "✓" : "",
-      `task-check${task.done ? " checked" : ""}`,
-      () => mutate(`tasks/${task.id}/`, { action: "toggle" }),
-      `${task.done ? "Reopen" : "Complete"} ${task.title}`,
-    );
-    toggle.setAttribute("aria-pressed", task.done);
-    row.append(toggle, el("span", "task-title", task.title));
     const actions = el("div", "task-actions");
-    if (task.id === next?.id) actions.append(el("span", "up-next", "UP NEXT"));
-    else if (!task.done)
+    if (!t.done && t.id !== first?.id)
       actions.append(
         button(
           "↑",
           "",
-          () =>
-            mutate(
-              `tasks/${task.id}/`,
-              { action: "first" },
-              "Moved to the top",
-            ),
-          `Make ${task.title} next`,
+          () => mutate(`tasks/${t.id}/`, { action: "first" }),
+          "Move to top",
         ),
       );
     actions.append(
@@ -300,683 +231,820 @@ function renderTasks() {
         "✎",
         "",
         () => {
-          const title = window.prompt("Rename this intention", task.title);
+          const title = window.prompt("Task", t.title);
           if (title?.trim())
-            mutate(`tasks/${task.id}/`, { action: "rename", title });
+            mutate(`tasks/${t.id}/`, { action: "rename", title });
         },
-        `Rename ${task.title}`,
+        "Rename task",
       ),
-    );
-    actions.append(
       button(
         "×",
         "",
-        () => {
-          if (
-            task.done ||
-            window.confirm(
-              `Archive “${task.title}”? Your session history will be kept.`,
-            )
-          )
-            mutate(`tasks/${task.id}/`, { action: "archive" });
-        },
-        `Archive ${task.title}`,
+        () => mutate(`tasks/${t.id}/`, { action: "archive" }),
+        "Archive task",
       ),
     );
     row.append(actions);
-    container.append(row);
+    list.append(row);
   }
 }
 function entries(day) {
-  const trackedBlocks = new Set(
-    day.sessions.filter((s) => s.kind === "meeting").map((s) => s.block_id),
-  );
+  const tracked = new Set(day.sessions.map((s) => s.block_id));
   return [
     ...day.sessions.map((s) => ({ ...s, type: "session" })),
     ...day.blocks
-      .filter((b) => !trackedBlocks.has(b.id))
+      .filter((b) => !tracked.has(b.id))
       .map((b) => ({ ...b, type: "block" })),
-    ...day.plan.map((p) => ({ ...p, type: "plan" })),
-  ].sort((a, b) => new Date(a.start) - new Date(b.start));
+    ...day.plan.map((p) => ({ ...p, type: "plan", title: "Focus" })),
+  ].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
-function timelineRow(item, compact) {
-  const row = el("div", "timeline-row");
-  row.append(el("span", "timeline-time", clock(item.start)));
-  if (item.type === "plan" && item.kind === "break") {
-    row.append(
-      el(
-        "div",
-        "timeline-rest",
-        `${duration((new Date(item.end) - new Date(item.start)) / 1000)} · breathe a little`,
-      ),
-    );
-    return row;
-  }
-  const cls = ["timeline-item"];
-  if (item.type === "plan") cls.push("planned");
-  if (item.type === "block") cls.push("reserved", item.kind);
-  if (item.type === "session" && item.status !== "completed")
-    cls.push("running");
-  let card;
-  if (item.type === "session" && item.status === "completed")
-    card = button(
-      "",
-      cls.join(" "),
-      () => openReview(item),
-      `Review ${item.title}, ${clock(item.start)}`,
-    );
-  else if (item.type === "block")
-    card = button(
-      "",
-      cls.join(" "),
-      () => openBlock(item),
-      `Edit ${item.title}`,
-    );
-  else card = el("div", cls.join(" "));
-  const title = item.type === "plan" ? "Room for focus" : item.title;
-  card.append(el("p", "", title));
-  if (item.allocations?.length > 1)
-    card.append(
-      el(
-        "p",
-        "small muted",
-        item.allocations.map((a) => `${a.percent}% ${a.label}`).join(" · "),
-      ),
-    );
-  const meta = el("div", "item-meta");
-  let label = `${duration((new Date(item.end) - new Date(item.start)) / 1000)}`;
-  if (item.type === "session")
-    label =
-      item.status === "completed"
-        ? `${duration(item.elapsed)} · ${item.kind === "meeting" ? "meeting" : "focused"}`
-        : item.status === "paused"
-          ? "Paused"
-          : "In progress";
-  if (item.type === "block")
-    label += item.kind === "meeting" ? " · meeting" : " · break";
-  if (item.type === "plan") label += " · planned";
-  meta.append(el("span", "", label));
-  if (item.type === "session" && item.status === "completed")
-    meta.append(sand(item.effort));
-  card.append(meta);
-  if (item.reflection) card.title = item.reflection;
-  row.append(card);
-  return row;
-}
-function renderTimeline(container, day, compact) {
+function renderTimeline(container, day) {
   container.replaceChildren();
-  const all = entries(day);
-  let dividerPlaced = false;
-  for (const item of all) {
-    if (compact && item.type === "plan" && item.kind === "break") continue;
-    if (
-      !compact &&
-      day.date === state.today &&
-      !dividerPlaced &&
-      new Date(item.start).getTime() >= now()
-    ) {
-      container.append(el("div", "timeline-divider", "FROM HERE"));
-      dividerPlaced = true;
+  for (const item of entries(day)) {
+    const row = el("div", "timeline-row");
+    row.append(el("span", "timeline-time", clock(item.start)));
+    if (item.type === "plan" && item.kind === "break") {
+      row.append(
+        el(
+          "div",
+          "timeline-rest",
+          `Break · ${duration((Date.parse(item.end) - Date.parse(item.start)) / 1000)}`,
+        ),
+      );
+    } else {
+      const cls = `timeline-item${item.type === "plan" ? " planned" : item.type === "block" ? ` reserved ${item.kind}` : item.status !== "completed" ? " running" : ""}`;
+      const card =
+        item.type === "block"
+          ? button("", cls, () => openBlock(item), `Edit ${item.title}`)
+          : item.status === "completed"
+            ? button("", cls, () => openReview(item), `Review ${item.title}`)
+            : el("div", cls);
+      card.append(el("p", "", item.title));
+      if (item.allocations?.length > 1) {
+        const chips = el("div", "allocation-chips");
+        for (const a of item.allocations) {
+          const chip = el("span", "allocation-chip", a.label);
+          chip.append(sand(a.sand));
+          chips.append(chip);
+        }
+        card.append(chips);
+      }
+      const meta = el("div", "item-meta");
+      meta.append(
+        el(
+          "span",
+          "",
+          item.type === "session"
+            ? item.status === "completed"
+              ? `${duration(item.elapsed)}${item.kind === "meeting" ? " · meeting" : ""}`
+              : item.status === "paused"
+                ? "Paused"
+                : "Running"
+            : `${duration((Date.parse(item.end) - Date.parse(item.start)) / 1000)}${item.type === "block" ? ` · ${item.kind}${item.template_id ? " ↻" : ""}` : ""}`,
+        ),
+      );
+      if (item.status === "completed") meta.append(sand(item.effort));
+      card.append(meta);
+      if (item.reflection) card.title = item.reflection;
+      row.append(card);
     }
-    container.append(timelineRow(item, compact));
+    container.append(row);
   }
-  if (!all.length)
-    container.append(
-      el(
-        "p",
-        compact ? "empty-tasks" : "timeline-empty",
-        day.date < state.today
-          ? "A quiet page. No tracked sessions."
-          : "Your day is open. Add a block or start a focus session.",
+  if (!container.childElementCount)
+    container.append(el("p", "timeline-empty", "No sessions"));
+}
+function remaining(s) {
+  return s.status === "running"
+    ? Math.max(0, (Date.parse(s.end) - now()) / 1000)
+    : s.remaining;
+}
+function nextSeconds(ignore = false) {
+  let value = state.next_requested;
+  if (state.next_block)
+    value = Math.min(
+      value,
+      Math.max(
+        0,
+        Math.floor((Date.parse(state.next_block.start) - now()) / 1000) -
+          (ignore ? 0 : state.preferences.short_break * 60),
       ),
     );
+  return value;
 }
-function liveBlock() {
-  return state?.live_block || null;
+function extendable(s) {
+  return (
+    s &&
+    s.can_overrun &&
+    (s.status === "running" ||
+      s.status === "paused" ||
+      (s.status === "completed" &&
+        now() - Date.parse(s.end) < 3600000 &&
+        state.last_completed?.id === s.id))
+  );
 }
 function tick() {
   if (!state) return;
-  const active = state.active;
-  const rest =
-    !active &&
-    state.break_until &&
-    new Date(state.break_until).getTime() > now();
-  const block = !active ? liveBlock() : null;
-  const reservedBreak =
-    block?.kind === "break" && new Date(block.end).getTime() > now();
-  const meeting =
-    block?.kind === "meeting" &&
-    !block.tracked &&
-    new Date(block.end).getTime() > now();
-  let seconds = state.preferences.focus_minutes * 60;
-  if (active)
-    seconds =
-      active.status === "paused"
-        ? active.remaining
-        : Math.max(
-            0,
-            Math.ceil((new Date(active.end).getTime() - now()) / 1000),
-          );
-  else if (reservedBreak)
-    seconds = Math.max(
-      0,
-      Math.ceil((new Date(block.end).getTime() - now()) / 1000),
-    );
-  else if (rest)
-    seconds = Math.max(
-      0,
-      Math.ceil((new Date(state.break_until).getTime() - now()) / 1000),
-    );
-  else if (meeting)
-    seconds = Math.max(
-      0,
-      Math.ceil((new Date(block.end).getTime() - now()) / 1000),
-    );
-  const timeText = `${Math.floor(seconds / 60)
-    .toString()
-    .padStart(2, "0")}:${(seconds % 60).toString().padStart(2, "0")}`;
-  $("timer-time").textContent = timeText;
-  document.title = active
-    ? `${timeText} · ${active.status === "paused" ? "Paused" : "Focus"} · Paradeis`
-    : "Paradeis · Make room for focus";
-  $("timer-mode").textContent = active
-    ? active.status === "paused"
-      ? "A MOMENT OF PAUSE"
-      : active.kind === "meeting"
-        ? "ONE UNINTERRUPTED BLOCK"
-        : "ONE THING AT A TIME"
-    : reservedBreak || rest
-      ? "A LITTLE BREATHING ROOM"
-      : meeting
-        ? "TIME FOR YOUR MEETING"
-        : "TIME TO FOCUS";
-  $("timer-cycle").textContent =
-    active?.kind === "meeting"
-      ? "MEETING"
-      : `${state.preferences.focus_minutes} / ${state.preferences.short_break}`;
-  const next = state.tasks.find((t) => !t.done);
-  $("timer-task").textContent =
-    active?.title ||
-    (reservedBreak
-      ? block.title
-      : meeting
-        ? block.title
-        : rest
-          ? "Step away. Let your mind wander."
-          : next?.title || "One thing. Your full attention.");
-  $("timer-main").textContent = active
-    ? active.status === "paused"
-      ? "Resume focus ▶"
-      : "Pause Ⅱ"
-    : reservedBreak
-      ? "On a scheduled break"
-      : rest
-        ? "Skip break →"
-        : meeting
-          ? "Start meeting ▶"
-          : "Start focus ▶";
+  const a = state.active,
+    block =
+      state.live_block && Date.parse(state.live_block.end) > now()
+        ? state.live_block
+        : null;
+  const resting = !a && !block && Date.parse(state.break_until) > now();
+  let seconds, mode, task, label;
+  if (a) {
+    seconds = remaining(a);
+    mode =
+      a.kind === "meeting"
+        ? "Meeting"
+        : a.status === "paused"
+          ? "Paused"
+          : "Focus";
+    task = a.title;
+    label =
+      a.kind === "meeting"
+        ? "Finish"
+        : a.status === "paused"
+          ? "Resume"
+          : "Pause";
+  } else if (block) {
+    seconds = Math.max(0, (Date.parse(block.end) - now()) / 1000);
+    mode = block.kind === "meeting" ? "Meeting" : "Break";
+    task = block.title;
+    label = "Start meeting";
+  } else if (resting) {
+    seconds = (Date.parse(state.break_until) - now()) / 1000;
+    mode = "Break";
+    task = "";
+    label = "Skip break";
+  } else {
+    seconds = nextSeconds();
+    mode = "Focus";
+    task = state.tasks.find((t) => !t.done)?.title || "";
+    label = "Start";
+  }
+  document.title = `${duration(seconds)} · Paradeis`;
+  $("timer-time").textContent = duration(seconds);
+  $("timer-mode").textContent = mode;
+  $("timer-task").textContent = task;
+  $("timer-main").textContent = label;
   $("timer-main").disabled =
-    !!reservedBreak || active?.kind === "meeting" || busy;
-  $("timer-finish").hidden = !active;
-  $("timer-cancel").hidden = !active;
-  $("timer-hint").textContent = active
-    ? active.status === "paused"
-      ? "Time stands still until you’re ready."
-      : `Until ${clock(active.end)} · your timer keeps time across refreshes.`
-    : reservedBreak
-      ? `You’ve made space until ${clock(block.end)}.`
-      : rest
-        ? "Your effort is saved. This time is yours."
-        : meeting
-          ? "Track the remaining meeting as one long session."
-          : `${state.preferences.focus_minutes} minutes of focus, then a little breathing room.`;
+    busy ||
+    (!a && block && (block.kind === "break" || block.tracked)) ||
+    (!a && !block && !resting && seconds < 1);
+  $("timer-time").disabled = !!block && !a;
+  $("timer-cycle").textContent =
+    `${state.day.sessions.filter((s) => s.status === "completed").length} completed`;
+  for (const id of ["timer-finish", "timer-cancel", "timer-overrun"])
+    $(id).disabled = busy;
+  $("timer-finish").hidden = !a || a.kind === "meeting";
+  $("timer-cancel").hidden = !a;
+  $("timer-overrun").hidden =
+    !extendable(a || state.last_completed) ||
+    (!!block && !a && block.kind === "break");
+  $("timer-ignore-break").hidden =
+    !!a ||
+    !!block ||
+    resting ||
+    !state.next_block ||
+    nextSeconds(true) <= nextSeconds();
+  $("timer-ignore-break").disabled = busy || nextSeconds(true) < 1;
   document
     .querySelector(".timer-card")
-    .classList.toggle("resting", !!(rest || reservedBreak));
-  const expired =
-    (active?.status === "running" && seconds === 0) ||
-    (!active &&
-      state.break_until &&
-      new Date(state.break_until).getTime() <= now()) ||
-    (block && new Date(block.end).getTime() <= now());
-  if (expired && now() - lastExpiryRefresh > 5000 && !busy) {
-    lastExpiryRefresh = now();
-    refresh().catch(showError);
+    .classList.toggle("resting", mode === "Break");
+  if (a?.status === "running" && seconds <= 0) {
+    notifyEnd(a);
+    if (now() - expiryRefresh > 1500) {
+      expiryRefresh = now();
+      refresh().catch(showError);
+    }
+  } else if (
+    !a &&
+    ((state.live_block && !block) ||
+      (state.break_until && !resting && Date.parse(state.break_until) <= now()))
+  ) {
+    if (now() - expiryRefresh > 1500) {
+      expiryRefresh = now();
+      refresh().catch(showError);
+    }
   }
 }
-async function timerAction(action) {
+async function timerAction(action, extra = {}) {
   await mutate("timer/", {
     action,
     ...(state.active ? { id: state.active.id } : {}),
-    ...(action === "start" &&
-    liveBlock()?.kind === "meeting" &&
-    !liveBlock().tracked
-      ? { block_id: liveBlock().id }
-      : {}),
+    ...extra,
   });
 }
-function openDialog(dialog) {
-  const error = dialog.querySelector(".dialog-error");
-  if (error) error.hidden = true;
-  if (!dialog.open) dialog.showModal();
-}
-function openReview(session) {
-  reviewing = session;
-  $("review-meta").textContent =
-    `${dateLabel(session.date, { day: "numeric", month: "short" })} · ${clock(session.start)} · ${duration(session.elapsed)} of ${session.kind === "meeting" ? "meeting time" : "focus"}`;
-  $("review-reflection").value = session.reflection || "";
-  $("effort-options").replaceChildren();
-  for (let i = 0; i <= 5; i++) {
-    const choice = el("label", "effort-choice");
-    choice.dataset.effort = i;
-    const radio = el("input");
-    radio.type = "radio";
-    radio.name = "effort";
-    radio.value = i;
-    radio.required = true;
-    radio.checked = session.effort === i;
-    radio.setAttribute("aria-label", `${i} sand of effort`);
-    choice.append(sandIcon(), el("span", "", String(i)), radio);
-    $("effort-options").append(choice);
+$("timer-main").onclick = () => {
+  const a = state.active,
+    b = state.live_block;
+  if (a)
+    timerAction(
+      a.kind === "meeting"
+        ? "finish"
+        : a.status === "paused"
+          ? "resume"
+          : "pause",
+    );
+  else if (b && Date.parse(b.end) > now()) {
+    askNotificationPermission();
+    timerAction("start", { block_id: b.id });
+  } else if (Date.parse(state.break_until) > now()) timerAction("skip_break");
+  else {
+    askNotificationPermission();
+    timerAction("start");
   }
+};
+$("timer-ignore-break").onclick = () => {
+  askNotificationPermission();
+  timerAction("start", { ignore_break: true });
+};
+$("timer-finish").onclick = () => timerAction("finish");
+$("timer-cancel").onclick = () => timerAction("cancel");
+$("timer-overrun").onclick = () =>
+  timerAction("overrun", { id: (state.active || state.last_completed).id });
+$("timer-time").onclick = () => {
+  $("timer-time").hidden = true;
+  $("duration-form").hidden = false;
+  $("duration-input").value = duration(
+    state.active ? remaining(state.active) : state.next_requested,
+  );
+  $("duration-input").focus();
+  $("duration-input").select();
+};
+function closeDuration() {
+  $("duration-form").hidden = true;
+  $("timer-time").hidden = false;
+}
+$("duration-input").onkeydown = (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    closeDuration();
+  }
+};
+$("duration-form").onsubmit = async (e) => {
+  e.preventDefault();
+  const raw = $("duration-input").value.trim();
+  if (!/^\d+(?::[0-5]\d)?$/.test(raw)) {
+    $("duration-input").setCustomValidity("Use minutes or minutes:seconds.");
+    $("duration-input").reportValidity();
+    return;
+  }
+  const [minutes, seconds = "0"] = raw.split(":"),
+    value = Number(minutes) * 60 + Number(seconds);
+  if (await timerActionResult(value)) closeDuration();
+};
+$("duration-input").oninput = () => $("duration-input").setCustomValidity("");
+async function timerActionResult(seconds) {
+  return mutate(
+    "timer/",
+    state.active
+      ? { action: "resize", id: state.active.id, seconds }
+      : { action: "set_next", seconds },
+  );
+}
+function openReview(s) {
+  reviewing = s;
+  $("review-title").textContent = s.kind === "meeting" ? "Meeting" : "Focus";
+  $("review-meta").textContent = `${clock(s.start)} · ${duration(s.elapsed)}`;
+  $("review-reflection").value = s.reflection || "";
   $("allocations").replaceChildren();
-  for (const allocation of session.allocations) addAllocation(allocation);
-  if (!session.allocations.length)
-    addAllocation({ label: session.title, percent: 100 });
-  updateAllocationTotal();
+  for (const a of s.allocations.length
+    ? s.allocations
+    : [{ label: s.title, sand: 0 }])
+    addAllocation(a);
+  $("review-overrun").hidden = !!state.active || !extendable(s);
   openDialog($("review-dialog"));
 }
-function addAllocation(allocation = {}) {
-  const container = $("allocations");
-  if (container.children.length >= 10) return;
+function addAllocation(a = {}) {
   const row = el("div", "allocation-row");
-  const controls = el("div", "allocation-controls");
-  const select = el("select");
-  select.setAttribute("aria-label", "Task for this part of the session");
-  const custom = el("option", "", "Something else…");
-  custom.value = "";
-  select.append(custom);
-  const tasks = [...state.tasks];
-  if (allocation.task_id && !tasks.some((t) => t.id === allocation.task_id))
-    tasks.push({ id: allocation.task_id, title: allocation.label });
-  for (const task of tasks) {
-    const option = el("option", "", task.title);
-    option.value = task.id;
-    select.append(option);
-  }
-  select.value = allocation.task_id || "";
-  const percent = el("input");
-  percent.type = "number";
-  percent.min = "1";
-  percent.max = "100";
-  percent.required = true;
-  percent.value = allocation.percent ?? 0;
-  percent.className = "allocation-percent";
-  percent.setAttribute("aria-label", "Percentage of session");
-  const label = el("input", "allocation-label");
-  label.maxLength = 200;
-  label.required = true;
-  label.placeholder = "What did you work on?";
-  label.value = allocation.label || "";
-  label.setAttribute("aria-label", "Task description");
-  select.addEventListener("change", () => {
-    if (select.value) label.value = select.selectedOptions[0].textContent;
-  });
-  percent.addEventListener("input", updateAllocationTotal);
-  controls.append(
-    select,
-    percent,
-    el("span", "small muted", "%"),
+  row.dataset.sand = a.sand || 0;
+  const input = el("input");
+  input.value = a.label || "";
+  input.placeholder = "Task";
+  input.maxLength = 200;
+  input.required = true;
+  input.setAttribute("aria-label", "Task worked on");
+  const control = el("div", "sand-control");
+  for (let i = 1; i <= 5; i++)
+    control.append(
+      button(
+        "",
+        "",
+        () => {
+          row.dataset.sand = Number(row.dataset.sand) === i ? i - 1 : i;
+          updateSand();
+        },
+        `${i} sand`,
+      ),
+    );
+  row.append(
+    input,
+    control,
     button(
       "×",
-      "icon-button",
+      "icon-button muted",
       () => {
-        if (container.children.length > 1) {
+        if ($("allocations").childElementCount > 1) {
           row.remove();
-          updateAllocationTotal();
+          updateSand();
         }
       },
-      "Remove task split",
+      "Remove task",
     ),
   );
-  row.append(controls, label);
-  container.append(row);
+  $("allocations").append(row);
+  updateSand();
 }
-function updateAllocationTotal() {
-  const total = [...document.querySelectorAll(".allocation-percent")].reduce(
-    (sum, input) => sum + Number(input.value),
-    0,
+function updateSand() {
+  const rows = [...$("allocations").children],
+    total = rows.reduce((n, r) => n + Number(r.dataset.sand), 0);
+  $("allocation-total").textContent = `${total} / 5 sand`;
+  $("allocation-add").disabled = rows.length >= 10;
+  for (const r of rows)
+    r.querySelectorAll(".sand-control button").forEach((b, index) => {
+      const value = index + 1,
+        count = Number(r.dataset.sand);
+      b.classList.toggle("filled", value <= count);
+      b.setAttribute("aria-pressed", value <= count);
+      b.disabled = value > count && total - count + value > 5;
+    });
+}
+$("allocation-add").onclick = () => {
+  addAllocation();
+  $("allocations").lastChild.querySelector("input").focus();
+};
+$("review-form").onsubmit = async (e) => {
+  e.preventDefault();
+  await mutate(
+    `sessions/${reviewing.id}/review/`,
+    {
+      reflection: $("review-reflection").value,
+      allocations: [...$("allocations").children].map((r) => ({
+        label: r.querySelector("input").value,
+        sand: Number(r.dataset.sand),
+      })),
+    },
+    $("review-dialog"),
   );
-  $("allocation-total").textContent =
-    `${total}% of this session assigned${total === 100 ? " · all accounted for" : " · should add up to 100%"}`;
-  $("allocation-add").disabled = $("allocations").children.length >= 10;
-}
-function openBlock(block = null) {
-  editingBlock = block;
-  $("block-title").textContent = block
-    ? "A little space, reserved."
-    : "Block out time";
-  $("block-kind").value = block?.kind || "meeting";
-  $("block-name").value = block?.title || "";
-  $("block-date").value = block?.date || selectedDay;
-  $("block-start").value = block?.start_time || "12:00";
-  $("block-end").value = block?.end_time || "13:00";
-  $("block-delete").hidden = !block;
+};
+$("review-overrun").onclick = () =>
+  mutate("timer/", { action: "overrun", id: reviewing.id }, $("review-dialog"));
+function openBlock(b = null) {
+  editingBlock = b;
+  const rounded = Math.ceil((now() + 1) / 300000) * 300000;
+  $("block-kind").value = b?.kind || "meeting";
+  $("block-name").value = b?.title || "";
+  $("block-date").value =
+    b?.date || (selectedDay === state.today ? localDate(rounded) : selectedDay);
+  $("block-start").value = b?.start_time || clock(rounded);
+  $("block-end").value =
+    b?.end_time ||
+    (localDate(rounded + 3600000) === localDate(rounded)
+      ? clock(rounded + 3600000)
+      : "23:59");
+  $("block-delete").hidden = !b;
+  $("block-repeat-controls").hidden = !!b;
+  $("block-repeat").checked = false;
+  $("block-template-edit").hidden = !b?.template_id;
   openDialog($("block-dialog"));
 }
-async function changeDay(day) {
-  if (
-    dayNoteDirty &&
-    !window.confirm("Leave this day without saving your note?")
-  )
-    return;
-  dayNoteDirty = false;
-  selectedDay = day;
+$("block-open").onclick = () => openBlock();
+$("block-form").onsubmit = (e) => {
+  e.preventDefault();
+  const data = {
+    title: $("block-name").value,
+    kind: $("block-kind").value,
+    date: $("block-date").value,
+    start: $("block-start").value,
+    end: $("block-end").value,
+  };
+  if (!editingBlock && $("block-repeat").checked)
+    data.repeat = { interval_weeks: Number($("block-interval").value) };
+  mutate(
+    `blocks/${editingBlock ? `${editingBlock.id}/` : ""}`,
+    data,
+    $("block-dialog"),
+  );
+};
+$("block-delete").onclick = () =>
+  mutate(`blocks/${editingBlock.id}/`, { action: "delete" }, $("block-dialog"));
+async function openRecurrences(id) {
   try {
-    await refresh();
-    await loadDayNote();
-  } catch (error) {
-    showError(error);
+    templates = (await api("recurrences/")).templates;
+    $("recurrence-form").hidden = true;
+    const list = $("recurrence-list");
+    list.replaceChildren();
+    for (const t of templates) {
+      const row = el("div", "recurrence-row");
+      row.append(
+        el(
+          "span",
+          "",
+          `${t.title} · ${["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][t.weekday]} ${t.start} · ${t.interval_weeks}w`,
+        ),
+        button("Edit", "secondary small", () => editRecurrence(t)),
+      );
+      list.append(row);
+    }
+    if (!templates.length)
+      list.append(el("p", "small muted", "No recurring blocks"));
+    if (id) editRecurrence(templates.find((t) => t.id === id));
+    openDialog($("recurrences-dialog"));
+  } catch (e) {
+    showError(e);
   }
 }
+function editRecurrence(t) {
+  if (!t) return;
+  editingTemplate = t;
+  $("recurrence-form").hidden = false;
+  for (const [field, key] of [
+    ["title", "title"],
+    ["kind", "kind"],
+    ["weekday", "weekday"],
+    ["interval", "interval_weeks"],
+    ["start", "start"],
+    ["end", "end"],
+    ["anchor", "anchor_date"],
+  ])
+    $(`repeat-${field}`).value = t[key];
+}
+$("recurrences-open").onclick = () => openRecurrences();
+$("block-template-edit").onclick = () => {
+  $("block-dialog").close();
+  openRecurrences(editingBlock.template_id);
+};
+$("recurrence-form").onsubmit = (e) => {
+  e.preventDefault();
+  mutate(
+    `recurrences/${editingTemplate.id}/`,
+    {
+      title: $("repeat-title").value,
+      kind: $("repeat-kind").value,
+      weekday: Number($("repeat-weekday").value),
+      interval_weeks: Number($("repeat-interval").value),
+      anchor_date: $("repeat-anchor").value,
+      start: $("repeat-start").value,
+      end: $("repeat-end").value,
+    },
+    $("recurrences-dialog"),
+  );
+};
+$("recurrence-delete").onclick = () =>
+  mutate(
+    `recurrences/${editingTemplate.id}/`,
+    { action: "delete" },
+    $("recurrences-dialog"),
+  );
 async function loadDayNote() {
-  const day = selectedDay;
-  const result = await api(`notes/?period=day&date=${day}`);
-  if (selectedDay === day && !dayNoteDirty) {
-    $("day-note").value = result.text;
-    $("day-note-status").textContent = "";
+  const day = selectedDay,
+    key = `day:${day}`;
+  const n = await api(`notes/?period=day&date=${day}`);
+  savedNotes.set(key, n.text);
+  if (selectedDay !== day) return;
+  $("day-note").value = drafts.get(key) ?? n.text;
+  $("day-note-status").textContent = drafts.has(key) ? "Unsaved" : "";
+}
+$("day-note").oninput = () => {
+  drafts.set(`day:${selectedDay}`, $("day-note").value);
+  $("day-note-status").textContent = "Unsaved";
+};
+async function saveNote(period, day, textarea, status) {
+  const key = `${period}:${day}`,
+    text = textarea.value;
+  try {
+    await api("notes/", { period, date: day, text });
+    savedNotes.set(key, text);
+    if (drafts.get(key) === text) drafts.delete(key);
+    if (calendarData) calendarData.notes[key] = text;
+    status.textContent = drafts.has(key) ? "Unsaved" : "Saved";
+  } catch (e) {
+    showError(e);
   }
+}
+$("day-note-form").onsubmit = (e) => {
+  e.preventDefault();
+  saveNote("day", selectedDay, $("day-note"), $("day-note-status"));
+};
+function noteEditor(period, day, summary, title) {
+  const key = `${period}:${day}`,
+    wrapper = el(
+      "section",
+      period === "day" ? "daily-summary" : "period-editor",
+    );
+  const heading = el("div", "section-heading");
+  heading.append(
+    el("h2", "", title),
+    el("span", "small muted", stats(summary)),
+  );
+  wrapper.append(heading);
+  const form = el("form"),
+    textarea = el("textarea");
+  textarea.rows = 2;
+  textarea.maxLength = 10000;
+  textarea.placeholder = "Notes";
+  textarea.setAttribute("aria-label", `${title} summary`);
+  textarea.dataset.note = key;
+  textarea.value =
+    drafts.get(key) ?? savedNotes.get(key) ?? calendarData.notes[key] ?? "";
+  const actions = el("div", "note-actions"),
+    status = el("span", "small muted", drafts.has(key) ? "Unsaved" : "");
+  status.setAttribute("aria-live", "polite");
+  textarea.oninput = () => {
+    drafts.set(key, textarea.value);
+    status.textContent = "Unsaved";
+  };
+  const save = el("button", "secondary small", "Save");
+  save.type = "submit";
+  actions.append(status, save);
+  form.append(textarea, actions);
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    saveNote(period, day, textarea, status);
+  };
+  wrapper.append(form);
+  return wrapper;
+}
+async function changeDay(day) {
+  selectedDay = day;
+  await showView(false);
 }
 async function showView(overview) {
   overviewVisible = overview;
   $("day-view").hidden = overview;
   $("overview").hidden = !overview;
-  $("today-view").classList.toggle("selected", !overview);
-  $("overview-view").classList.toggle("selected", overview);
-  $("today-view").setAttribute("aria-pressed", !overview);
-  $("overview-view").setAttribute("aria-pressed", overview);
-  renderHeading();
-  if (overview) {
-    try {
-      await loadWeek();
-      await loadPeriodNote();
-    } catch (error) {
-      showError(error);
-    }
+  for (const [id, chosen] of [
+    ["today-view", !overview],
+    ["overview-view", overview],
+  ]) {
+    $(id).classList.toggle("selected", chosen);
+    $(id).setAttribute("aria-pressed", chosen);
+  }
+  try {
+    if (overview) await loadCalendar({ target: state.today });
+    else await refresh();
+  } catch (e) {
+    showError(e);
   }
 }
-async function loadWeek() {
-  const version = ++historyVersion;
-  const data = await api(`history/?start=${weekStart}`);
-  if (version !== historyVersion) return;
-  weekData = data;
-  $("week-label").textContent =
-    `${dateLabel(weekStart, { day: "numeric", month: "short" })} – ${dateLabel(shiftDay(weekStart, 6), { day: "numeric", month: "short", year: "numeric" })}`;
-  $("week-summary").replaceChildren(
-    summaryElement(`${data.summary.effort} sand`, "effort noticed", true),
-    summaryElement(duration(data.summary.seconds), "time given"),
-    summaryElement(
-      `${data.summary.count} sessions`,
-      data.summary.unrated
-        ? `${data.summary.unrated} awaiting effort ratings`
-        : "all accounted for",
-    ),
+$("today-view").onclick = () => showView(false);
+$("overview-view").onclick = () => showView(true);
+$("day-prev").onclick = () => changeDay(shiftDay(selectedDay, -1));
+$("day-next").onclick = () => changeDay(shiftDay(selectedDay, 1));
+$("go-today").onclick = () => changeDay(state.today);
+function stride() {
+  const style = getComputedStyle(document.documentElement);
+  return (
+    parseFloat(style.getPropertyValue("--day-width")) +
+    parseFloat(style.getPropertyValue("--day-gap"))
   );
-  $("week-days").replaceChildren();
-  for (const day of data.days) {
-    const column = el(
-      "section",
-      `week-day${day.date === state.today ? " current" : ""}`,
+}
+async function loadCalendar({ target, preserve = false } = {}) {
+  const version = ++historyVersion,
+    oldStart = calendarData?.days[0].date,
+    oldScroll = $("calendar-scroll").scrollLeft;
+  loadingCalendar = true;
+  const first = monday(month(calendarAnchor, -1)),
+    last = shiftDay(monday(shiftDay(month(calendarAnchor, 2), -1)), 6);
+  try {
+    const data = await api(`history/?start=${first}&end=${last}`);
+    if (version !== historyVersion) return;
+    calendarData = data;
+    for (const [key, value] of Object.entries(data.notes))
+      savedNotes.set(key, value);
+    renderCalendar();
+    if (preserve && oldStart) {
+      const delta = (Date.parse(first) - Date.parse(oldStart)) / 86400000;
+      $("calendar-scroll").scrollLeft = oldScroll - delta * stride();
+    } else {
+      const date = target || calendarAnchor,
+        index = data.days.findIndex((d) => d.date === date);
+      $("calendar-scroll").scrollLeft = Math.max(0, index) * stride();
+    }
+  } finally {
+    if (version === historyVersion) loadingCalendar = false;
+  }
+}
+function renderCalendar() {
+  const grid = $("calendar-grid"),
+    days = calendarData.days;
+  grid.replaceChildren();
+  grid.style.gridTemplateColumns = `repeat(${days.length}, var(--day-width))`;
+  $("calendar-label").textContent = dateLabel(calendarAnchor, {
+    month: "long",
+    year: "numeric",
+  });
+  $("calendar-total").textContent = stats(
+    calendarData.period_summaries[`month:${calendarAnchor}`],
+  );
+  days.forEach((day, index) => {
+    const card = el(
+      "article",
+      `calendar-day${day.date === state.today ? " today" : ""}${day.date === monday(day.date) ? " monday" : ""}`,
     );
+    card.style.gridColumn = index + 1;
     const header = button(
       "",
-      "week-day-header",
-      async () => {
-        await changeDay(day.date);
-        await showView(false);
-      },
+      "calendar-day-header",
+      () => changeDay(day.date),
       `Open ${day.date}`,
     );
     header.append(
-      el("span", "day-name", dateLabel(day.date, { weekday: "short" })),
-      el("span", "day-number", dateLabel(day.date, { day: "numeric" })),
+      el("span", "", dateLabel(day.date, { weekday: "short", month: "short" })),
+      el("strong", "", dateLabel(day.date, { day: "numeric" })),
     );
-    column.append(
+    const timeline = el("div", "timeline");
+    renderTimeline(timeline, day);
+    card.append(
       header,
-      el(
-        "div",
-        "day-summary",
-        `${duration(day.summary.seconds)} · ${day.summary.effort} sand${day.summary.unrated ? ` · ${day.summary.unrated} unrated` : ""}`,
-      ),
+      timeline,
+      noteEditor("day", day.date, day.summary, day.date),
     );
-    const timeline = el("div");
-    renderTimeline(timeline, day, true);
-    column.append(timeline);
-    $("week-days").append(column);
-  }
-  renderHeading();
-}
-async function navigateWeek(next) {
-  if (
-    periodNoteDirty &&
-    !window.confirm("Leave without saving this reflection?")
-  )
-    return;
-  periodNoteDirty = false;
-  weekStart = next;
-  try {
-    await loadWeek();
-    await loadPeriodNote();
-  } catch (error) {
-    showError(error);
-  }
-}
-async function loadPeriodNote() {
-  if (periodNoteDirty) return;
-  const version = ++noteVersion;
-  const result = await api(`notes/?period=${period}&date=${weekStart}`);
-  if (version !== noteVersion || periodNoteDirty) return;
-  $("period-note").value = result.text;
-  $("period-note-status").textContent = "";
-  $("period-note-label").textContent =
-    period === "week"
-      ? `Week of ${dateLabel(weekStart, { day: "numeric", month: "long", year: "numeric" })}`
-      : `${dateLabel(weekStart, { month: "long", year: "numeric" })} · the month containing this week’s Monday`;
-}
-async function changePeriod(next) {
-  if (
-    periodNoteDirty &&
-    !window.confirm("Switch without saving this reflection?")
-  )
-    return;
-  periodNoteDirty = false;
-  period = next;
-  for (const value of ["week", "month"]) {
-    $(`note-${value}-tab`).classList.toggle("selected", value === period);
-    $(`note-${value}-tab`).setAttribute("aria-pressed", value === period);
-  }
-  try {
-    await loadPeriodNote();
-  } catch (error) {
-    showError(error);
-  }
-}
-
-$("task-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (await mutate("tasks/", { title: $("task-title").value })) {
-    $("task-title").value = "";
-    $("task-title").focus();
-  }
-});
-$("timer-main").addEventListener("click", () => {
-  if (state.active)
-    timerAction(state.active.status === "paused" ? "resume" : "pause");
-  else if (state.break_until && new Date(state.break_until).getTime() > now())
-    timerAction("skip_break");
-  else timerAction("start");
-});
-$("timer-finish").addEventListener("click", () => timerAction("finish"));
-$("timer-cancel").addEventListener("click", () => {
-  if (window.confirm("Discard this session? It won’t count towards your day."))
-    timerAction("cancel");
-});
-$("block-open").addEventListener("click", () => openBlock());
-$("block-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await mutate(
-    `blocks/${editingBlock ? `${editingBlock.id}/` : ""}`,
-    {
-      date: $("block-date").value,
-      start: $("block-start").value,
-      end: $("block-end").value,
-      kind: $("block-kind").value,
-      title: $("block-name").value,
-    },
-    "Time reserved",
-    $("block-dialog"),
-  );
-});
-$("block-delete").addEventListener("click", async () => {
-  if (window.confirm("Remove this block from your day?"))
-    await mutate(
-      `blocks/${editingBlock.id}/`,
-      { action: "delete" },
-      "Time freed up",
-      $("block-dialog"),
-    );
-});
-$("allocation-add").addEventListener("click", () => {
-  addAllocation();
-  const inputs = [...document.querySelectorAll(".allocation-percent")];
-  const each = Math.floor(100 / inputs.length);
-  inputs.forEach((input, index) => {
-    input.value = index === 0 ? 100 - each * (inputs.length - 1) : each;
+    grid.append(card);
   });
-  updateAllocationTotal();
-});
-$("review-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const effort = document.querySelector('input[name="effort"]:checked');
-  if (!effort) return;
-  const allocations = [...document.querySelectorAll(".allocation-row")].map(
-    (row) => ({
-      task_id: Number(row.querySelector("select").value) || null,
-      label: row.querySelector(".allocation-label").value,
-      percent: Number(row.querySelector(".allocation-percent").value),
-    }),
+  for (let i = 0; i < days.length; i += 7)
+    addPeriod(
+      "week",
+      days[i].date,
+      i,
+      7,
+      `Week · ${dateLabel(days[i].date, { month: "short", day: "numeric" })}`,
+    );
+  for (let offset = -1; offset <= 1; offset++) {
+    const first = month(calendarAnchor, offset),
+      next = month(first, 1),
+      index = days.findIndex((d) => d.date === first),
+      length = (Date.parse(next) - Date.parse(first)) / 86400000;
+    addPeriod(
+      "month",
+      first,
+      index,
+      length,
+      dateLabel(first, { month: "long", year: "numeric" }),
+    );
+  }
+  resizeEditors();
+}
+function addPeriod(period, day, index, length, title) {
+  if (index < 0) return;
+  const group = el("section", `period-group ${period}`);
+  group.style.gridColumn = `${index + 1} / span ${length}`;
+  group.dataset.period = `${period}:${day}`;
+  group.append(
+    noteEditor(
+      period,
+      day,
+      calendarData.period_summaries[`${period}:${day}`],
+      title,
+    ),
   );
-  await mutate(
-    `sessions/${reviewing.id}/review/`,
-    {
-      effort: Number(effort.value),
-      reflection: $("review-reflection").value,
-      allocations,
-    },
-    "A little effort, noticed.",
-    $("review-dialog"),
+  $("calendar-grid").append(group);
+}
+function resizeEditors() {
+  $("calendar-scroll").style.setProperty(
+    "--editor-width",
+    `${Math.max(160, $("calendar-scroll").clientWidth - 2)}px`,
   );
-});
-$("settings-open").addEventListener("click", () => {
-  if (!state) return;
+}
+if (window.ResizeObserver)
+  new ResizeObserver(resizeEditors).observe($("calendar-scroll"));
+$("calendar-scroll").onscroll = () => {
+  if (loadingCalendar || !overviewVisible || !calendarData) return;
+  const scroll = $("calendar-scroll"),
+    edge = stride() * 3;
+  if (scroll.scrollLeft < edge) {
+    calendarAnchor = month(calendarAnchor, -1);
+    loadCalendar({ preserve: true }).catch(showError);
+  } else if (
+    scroll.scrollWidth - scroll.clientWidth - scroll.scrollLeft <
+    edge
+  ) {
+    calendarAnchor = month(calendarAnchor, 1);
+    loadCalendar({ preserve: true }).catch(showError);
+  }
+};
+$("month-prev").onclick = () => {
+  calendarAnchor = month(calendarAnchor, -1);
+  loadCalendar().catch(showError);
+};
+$("month-next").onclick = () => {
+  calendarAnchor = month(calendarAnchor, 1);
+  loadCalendar().catch(showError);
+};
+$("calendar-today").onclick = () => {
+  calendarAnchor = month(state.today);
+  loadCalendar({ target: state.today }).catch(showError);
+};
+$("task-form").onsubmit = async (e) => {
+  e.preventDefault();
+  if (await mutate("tasks/", { title: $("task-title").value }))
+    $("task-title").value = "";
+};
+$("settings-open").onclick = () => {
   for (const [key, value] of Object.entries(state.preferences))
-    $(key).value = value;
+    if ($(key)) $(key).value = value;
   openDialog($("settings-dialog"));
-});
-$("settings-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
+};
+$("settings-form").onsubmit = (e) => {
+  e.preventDefault();
   const data = {};
-  for (const key of [
+  for (const field of ["timezone", "day_start", "day_end"])
+    data[field] = $(field).value;
+  for (const field of [
     "focus_minutes",
     "short_break",
     "long_break",
     "long_every",
   ])
-    data[key] = Number($(key).value);
-  for (const key of ["day_start", "day_end", "timezone"])
-    data[key] = $(key).value;
-  await mutate("settings/", data, "Your rhythm is saved", $("settings-dialog"));
-});
-document
-  .querySelectorAll("[data-close]")
-  .forEach((node) =>
-    node.addEventListener("click", () => node.closest("dialog").close()),
+    data[field] = Number($(field).value);
+  mutate("settings/", data, $("settings-dialog"));
+};
+for (const b of document.querySelectorAll("[data-close]"))
+  b.onclick = () => b.closest("dialog").close();
+let worker;
+let deadlineTimeout;
+if ("serviceWorker" in navigator)
+  worker = navigator.serviceWorker
+    .register("/sw.js")
+    .then(() => navigator.serviceWorker.ready)
+    .catch(() => null);
+function notificationEnabled() {
+  return localStorage.getItem("notifications") !== "off";
+}
+function updateNotifications() {
+  const available = "Notification" in window;
+  $("notifications-toggle").setAttribute(
+    "aria-pressed",
+    available && Notification.permission === "granted" && notificationEnabled(),
   );
-$("day-prev").addEventListener("click", () =>
-  changeDay(shiftDay(selectedDay, -1)),
-);
-$("day-next").addEventListener("click", () =>
-  changeDay(shiftDay(selectedDay, 1)),
-);
-$("go-today").addEventListener("click", () => changeDay(state.today));
-$("day-date").addEventListener("change", () => {
-  if ($("day-date").value) changeDay($("day-date").value);
-});
-$("today-view").addEventListener("click", () => {
-  if (state) showView(false);
-});
-$("overview-view").addEventListener("click", () => {
-  if (state) showView(true);
-});
-$("week-prev").addEventListener("click", () =>
-  navigateWeek(shiftDay(weekStart, -7)),
-);
-$("week-next").addEventListener("click", () =>
-  navigateWeek(shiftDay(weekStart, 7)),
-);
-$("this-week").addEventListener("click", () =>
-  navigateWeek(monday(state.today)),
-);
-$("note-week-tab").addEventListener("click", () => changePeriod("week"));
-$("note-month-tab").addEventListener("click", () => changePeriod("month"));
-$("day-note").addEventListener("input", () => {
-  dayNoteDirty = true;
-  $("day-note-status").textContent = "Unsaved";
-});
-$("period-note").addEventListener("input", () => {
-  periodNoteDirty = true;
-  $("period-note-status").textContent = "Unsaved";
-});
-$("day-note-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const value = $("day-note").value;
-  try {
-    await api("notes/", { period: "day", date: selectedDay, text: value });
-    if ($("day-note").value === value) dayNoteDirty = false;
-    $("day-note-status").textContent = dayNoteDirty ? "Unsaved" : "Saved";
-  } catch (error) {
-    showError(error);
+}
+function askNotificationPermission() {
+  if (
+    "Notification" in window &&
+    Notification.permission === "default" &&
+    localStorage.getItem("notification-asked") !== "yes"
+  ) {
+    localStorage.setItem("notification-asked", "yes");
+    Notification.requestPermission()
+      .then(updateNotifications)
+      .catch(() => {});
   }
-});
-$("period-note-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const value = $("period-note").value;
-  try {
-    await api("notes/", { period, date: weekStart, text: value });
-    if ($("period-note").value === value) periodNoteDirty = false;
-    $("period-note-status").textContent = periodNoteDirty ? "Unsaved" : "Saved";
-  } catch (error) {
-    showError(error);
+}
+$("notifications-toggle").onclick = async () => {
+  if (!("Notification" in window)) {
+    toast("Notifications unavailable in this browser");
+    return;
   }
-});
-window.addEventListener("beforeunload", (event) => {
-  if (dayNoteDirty || periodNoteDirty) {
-    event.preventDefault();
-    event.returnValue = "";
+  if (Notification.permission === "default")
+    await Notification.requestPermission();
+  else if (Notification.permission === "granted")
+    localStorage.setItem("notifications", notificationEnabled() ? "off" : "on");
+  if (Notification.permission === "denied")
+    toast("Enable notifications in your browser's site settings");
+  updateNotifications();
+};
+async function notifyEnd(s) {
+  if (
+    s.status !== "running" ||
+    Date.parse(s.end) > now() ||
+    !("Notification" in window) ||
+    Notification.permission !== "granted" ||
+    !notificationEnabled()
+  )
+    return;
+  const key = `notified:${s.id}:${s.end}`;
+  if (notified.has(key) || localStorage.getItem(key)) return;
+  notified.add(key);
+  localStorage.setItem(key, "yes");
+  const title = s.kind === "meeting" ? "Meeting complete" : "Focus complete",
+    options = { body: s.title, tag: key, icon: "/static/icon.svg" };
+  try {
+    const registration = worker ? await worker : null;
+    if (registration) await registration.showNotification(title, options);
+    else {
+      const n = new Notification(title, options);
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    }
+  } catch {
+    /* Browser notification failures must not interrupt the timer. */
+  }
+}
+window.addEventListener("beforeunload", (e) => {
+  if (drafts.size) {
+    e.preventDefault();
+    e.returnValue = "";
   }
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden && !busy) refresh().catch(showError);
+  if (!document.hidden) refresh().catch(showError);
 });
 setInterval(tick, 250);
 setInterval(() => {
   if (!document.hidden && !busy) refresh().catch(showError);
 }, 15000);
-(async () => {
-  try {
-    await refresh();
-    await loadDayNote();
-  } catch (error) {
-    showError(error);
-  }
-})();
+updateNotifications();
+refresh().catch(showError);
