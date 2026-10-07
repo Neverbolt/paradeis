@@ -59,6 +59,36 @@ class AppTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(response.json()["preferences"]["day_start"], "09:00")
 
+    def test_task_order_persists_and_sets_next_focus_task(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        done = Task.objects.create(user=self.user, title="Done", done=True, position=8,
+                                   completed_on=date(2026, 10, 7))
+        ids = [second.id, self.task.id]
+        response = self.post("/api/tasks/reorder/", {"ids": ids})
+        self.assertEqual(response.status_code, 200, response.content)
+        state = self.client.get("/api/state/").json()
+        self.assertEqual([t["id"] for t in state["tasks"] if not t["done"]], ids)
+        done.refresh_from_db()
+        self.assertEqual(done.position, 8)
+        session = self.start()
+        self.assertEqual(session.allocations.get().task, second)
+        self.post("/api/tasks/reorder/", {"ids": list(reversed(ids))})
+        self.assertEqual(session.allocations.get().task, second)
+
+    def test_task_reorder_rejects_stale_and_invalid_lists_atomically(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        foreign = Task.objects.create(user=self.other, title="Private")
+        done = Task.objects.create(user=self.user, title="Done", done=True)
+        archived = Task.objects.create(user=self.user, title="Archived", archived=True)
+        for ids in ([second.id], [second.id, second.id], [second.id, foreign.id],
+                    [second.id, done.id], [second.id, archived.id]):
+            with self.subTest(ids=ids):
+                self.assertEqual(self.post("/api/tasks/reorder/", {"ids": ids}).status_code, 409)
+                self.assertEqual(list(Task.objects.filter(user=self.user, done=False,
+                    archived=False).values_list("id", flat=True)), [self.task.id, second.id])
+        for ids in (None, "bad", [True, second.id], [str(self.task.id), second.id]):
+            self.assertEqual(self.post("/api/tasks/reorder/", {"ids": ids}).status_code, 400)
+
     def test_timer_persists_default_task_and_prevents_duplicates(self):
         session = self.start()
         self.assertEqual(session.allocations.get().task, self.task)

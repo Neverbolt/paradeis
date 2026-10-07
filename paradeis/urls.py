@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/state/", views.state),
     path("api/history/", views.history),
     path("api/tasks/", views.task_create),
+    path("api/tasks/reorder/", views.task_reorder),
     path("api/tasks/<int:pk>/", views.task_update),
     path("api/timer/", views.timer),
     path("api/sessions/<int:pk>/review/", views.review),

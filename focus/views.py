@@ -333,6 +333,21 @@ def task_create(request, data, prefs, now, active):
 
 
 @api(["POST"])
+def task_reorder(request, data, prefs, now, active):
+    ids = data.get("ids")
+    if not isinstance(ids, list) or any(type(pk) is not int for pk in ids):
+        raise ValueError("Choose a valid task order.")
+    tasks = list(Task.objects.filter(user=request.user, archived=False, done=False))
+    if len(ids) != len(tasks) or set(ids) != {task.id for task in tasks}:
+        raise Conflict("The task list changed. Refresh and try again.")
+    positions = {pk: position for position, pk in enumerate(ids)}
+    for task in tasks:
+        task.position = positions[task.id]
+    Task.objects.bulk_update(tasks, ["position"])
+    return JsonResponse({"ok": True})
+
+
+@api(["POST"])
 def task_update(request, data, prefs, now, active, pk):
     task = Task.objects.get(id=pk, user=request.user)
     action = data.get("action")

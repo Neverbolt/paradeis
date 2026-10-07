@@ -1151,3 +1151,17 @@ dialog::backdrop {
 .day-completed-tasks { max-height: 100px; overflow-y: auto; margin-bottom: 8px; }
 .completed-result { font-size: 11px; overflow-wrap: anywhere; margin-top: 3px; }
 .task-group-label { margin-top: 6px; }
+
+.task-handle {
+  padding: 2px 0;
+  color: var(--muted);
+  cursor: grab;
+  flex-shrink: 0;
+}
+.task-row.dragging {
+  opacity: .5;
+  border-color: var(--green);
+}
+.task-actions button:disabled {
+  opacity: .25;
+}
