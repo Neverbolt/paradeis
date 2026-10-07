@@ -162,6 +162,7 @@ async function waitFor(check, label) {
     () => $("completed-task-list").children.length === 0,
     "reopen task",
   );
+  await waitFor(() => !$("task-list").querySelector(".task-down").disabled, "task controls ready");
   $("task-list").querySelector(".task-down").click();
   await waitFor(() => $("task-list").querySelector(".task-title").value.startsWith("Review notes"), "move task down");
   await waitFor(() => w.document.activeElement.className === "task-handle", "focus after reorder");

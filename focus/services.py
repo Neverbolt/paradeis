@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from .models import Allocation, Block, Preferences, Session
+from .models import Allocation, Block, Preferences, Session, TaskFocusSpan
 
 
 class Conflict(ValueError):
@@ -57,7 +57,55 @@ def block_bounds(block, prefs):
     return instant(block.date, block.start, zone), instant(block.date, block.end, zone)
 
 
+def track_top_task(session, now):
+    """Close/open a durable task interval at queue and timer transitions."""
+    if not session or session.kind != "focus":
+        return
+    span = session.task_spans.filter(ended_at__isnull=True).first()
+    task = (session.user.task_set.filter(done=False, archived=False).first()
+            if session.status == "running" else None)
+    if span and (not task or span.task_id != task.id):
+        span.ended_at = max(span.started_at, min(now, session.deadline))
+        span.save(update_fields=["ended_at"])
+        span = None
+    if task and span is None:
+        TaskFocusSpan.objects.create(session=session, task=task, label=task.title,
+                                     started_at=now)
+
+
+def close_task_span(session, now):
+    span = session.task_spans.filter(ended_at__isnull=True).first()
+    if span:
+        span.ended_at = max(span.started_at, min(now, session.deadline))
+        span.save(update_fields=["ended_at"])
+
+
+def collect_focus_tasks(session):
+    totals = {}
+    for span in session.task_spans.filter(ended_at__isnull=False):
+        key = span.task_id if span.task_id else ("deleted", span.label)
+        if key not in totals:
+            totals[key] = [span, 0]
+        totals[key][1] += (span.ended_at - span.started_at).total_seconds()
+    qualifying = [span for span, seconds in totals.values() if seconds >= 30]
+    if not qualifying:
+        return  # Keep a useful description for a very short focus session.
+    session.allocations.filter(automatic=True).delete()
+    existing = list(session.allocations.all())
+    for span in qualifying:
+        if not any((span.task_id and a.task_id == span.task_id) or
+                   (a.task_id is None and a.label == span.label)
+                   for a in existing):
+            allocation = Allocation.objects.create(session=session, task_id=span.task_id,
+                label=span.label, automatic=True)
+            existing.append(allocation)
+    session.title = " + ".join(a.label for a in existing)[:200]
+
+
 def complete(session, prefs, now):
+    close_task_span(session, now)
+    if session.kind == "focus":
+        collect_focus_tasks(session)
     if session.status == "running":
         end = min(now, session.deadline)
         session.elapsed_seconds += max(0, int((end - session.resumed_at).total_seconds()))
@@ -152,7 +200,8 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False):
         remaining_seconds=seconds,
         planned_seconds=seconds,
     )
-    Allocation.objects.create(session=session, task=task, label=title)
+    Allocation.objects.create(session=session, task=task, label=title, automatic=kind == "focus")
+    track_top_task(session, now)
     prefs.next_focus_seconds = None
     prefs.save(update_fields=["next_focus_seconds"])
     return session
@@ -247,6 +296,7 @@ def resize_session(session, user, prefs, now, seconds, overrun=False):
     session.remaining_seconds = seconds
     session.planned_seconds = session.elapsed_seconds + seconds
     session.save()
+    track_top_task(session, now)
     return session
 
 

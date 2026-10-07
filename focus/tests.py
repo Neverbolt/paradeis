@@ -75,6 +75,76 @@ class AppTests(TestCase):
         self.post("/api/tasks/reorder/", {"ids": list(reversed(ids))})
         self.assertEqual(session.allocations.get().task, second)
 
+    def test_focus_collects_tasks_after_thirty_seconds_and_ignores_brief_switches(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        brief = Task.objects.create(user=self.user, title="Brief", position=2)
+        session = self.start()
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, NOW + timedelta(seconds=30))
+        self.post("/api/tasks/reorder/", {"ids": [brief.id, second.id]}, NOW + timedelta(seconds=60))
+        self.post("/api/tasks/reorder/", {"ids": [second.id, brief.id]}, NOW + timedelta(seconds=89))
+        self.finish(session, NOW + timedelta(seconds=100))
+        session.refresh_from_db()
+        self.assertEqual(list(session.allocations.values_list("task_id", flat=True)),
+                         [self.task.id, second.id])
+        self.assertEqual(session.title, "Write the proposal + Second")
+        self.assertEqual(session.task_spans.filter(ended_at__isnull=True).count(), 0)
+        self.finish(session, NOW + timedelta(seconds=101))
+        self.assertEqual(session.allocations.count(), 2)
+
+    def test_focus_task_time_is_cumulative_and_excludes_pause(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        session = self.start()
+        self.post("/api/tasks/reorder/", {"ids": [second.id, self.task.id]}, NOW + timedelta(seconds=15))
+        self.post("/api/timer/", {"action": "pause", "id": session.id}, NOW + timedelta(seconds=35))
+        self.post("/api/tasks/reorder/", {"ids": [self.task.id, second.id]}, NOW + timedelta(minutes=5))
+        self.post("/api/timer/", {"action": "resume", "id": session.id}, NOW + timedelta(minutes=10))
+        self.finish(session, NOW + timedelta(minutes=10, seconds=15))
+        self.assertEqual(list(session.allocations.values_list("task_id", flat=True)), [self.task.id])
+
+    def test_focus_natural_completion_caps_task_time_at_deadline(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        session = self.start()
+        self.post("/api/tasks/reorder/", {"ids": [second.id, self.task.id]},
+                  NOW + timedelta(minutes=24, seconds=31))
+        with patch("focus.views.timezone.now", return_value=NOW + timedelta(hours=3)):
+            state = self.client.get("/api/state/").json()
+        self.assertIsNone(state["active"])
+        self.assertEqual(list(session.allocations.values_list("task_id", flat=True)), [self.task.id])
+
+    def test_focus_tasks_survive_rename_archive_and_overrun(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        session = self.start()
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "archive"}, NOW + timedelta(seconds=30))
+        self.post(f"/api/tasks/{second.id}/", {"action": "rename", "title": "Renamed"}, NOW + timedelta(seconds=45))
+        self.finish(session)
+        self.assertEqual(list(session.allocations.values_list("label", flat=True)),
+                         ["Write the proposal", "Second"])
+        self.post("/api/timer/", {"action": "overrun", "id": session.id}, NOW + timedelta(minutes=26))
+        self.finish(session, NOW + timedelta(minutes=31))
+        self.assertEqual(list(session.allocations.values_list("label", flat=True)),
+                         ["Write the proposal", "Second"])
+
+    def test_focus_keeps_distinct_tasks_with_the_same_name(self):
+        second = Task.objects.create(user=self.user, title=self.task.title, position=1)
+        session = self.start()
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, NOW + timedelta(seconds=30))
+        self.finish(session, NOW + timedelta(seconds=60))
+        self.assertEqual(list(session.allocations.values_list("task_id", flat=True)),
+                         [self.task.id, second.id])
+
+    def test_focus_overrun_preserves_manual_review_and_tracks_new_task(self):
+        second = Task.objects.create(user=self.user, title="Second", position=1)
+        session = self.start()
+        self.finish(session)
+        self.post(f"/api/sessions/{session.id}/review/", {"allocations": [
+            {"task_id": self.task.id, "label": "Custom description", "sand": 4}]},
+            NOW + timedelta(minutes=25))
+        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, NOW + timedelta(minutes=26))
+        self.post("/api/timer/", {"action": "overrun", "id": session.id}, NOW + timedelta(minutes=27))
+        self.finish(session, NOW + timedelta(minutes=32))
+        self.assertEqual(list(session.allocations.values_list("label", "sand")),
+                         [("Custom description", 4), ("Second", 0)])
+
     def test_task_reorder_rejects_stale_and_invalid_lists_atomically(self):
         second = Task.objects.create(user=self.user, title="Second", position=1)
         foreign = Task.objects.create(user=self.other, title="Private")

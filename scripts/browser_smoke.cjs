@@ -48,6 +48,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator("#task-title").fill("Second browser task");
     await page.locator("#task-form button").click();
     await waitFor(() => document.querySelectorAll("#task-list .task-row").length === 2);
+    await waitFor(() => document.querySelector("#task-list .task-handle").draggable);
     await Promise.all([
       page.waitForResponse(r => r.url().endsWith("/api/tasks/reorder/") && r.status() === 200),
       page.locator("#task-list .task-handle").nth(1).dragTo(

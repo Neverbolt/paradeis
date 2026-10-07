@@ -34,6 +34,8 @@ from .services import (
     serialize_session,
     settle,
     start_session,
+    track_top_task,
+    close_task_span,
     summary,
 )
 
@@ -329,6 +331,7 @@ def task_create(request, data, prefs, now, active):
         raise ValueError("Complete or archive tasks before adding more (200 pending tasks maximum).")
     last = Task.objects.filter(user=request.user).aggregate(last=Max("position"))["last"] or 0
     task = Task.objects.create(user=request.user, title=title, position=last + 1)
+    track_top_task(active, now)
     return JsonResponse({"id": task.id}, status=201)
 
 
@@ -344,6 +347,7 @@ def task_reorder(request, data, prefs, now, active):
     for task in tasks:
         task.position = positions[task.id]
     Task.objects.bulk_update(tasks, ["position"])
+    track_top_task(active, now)
     return JsonResponse({"ok": True})
 
 
@@ -376,6 +380,7 @@ def task_update(request, data, prefs, now, active, pk):
     else:
         raise ValueError("Unknown task action.")
     task.save()
+    track_top_task(active, now)
     return JsonResponse({"ok": True})
 
 
@@ -438,6 +443,7 @@ def timer(request, data, prefs, now, active):
         )
         active.remaining_seconds -= elapsed
         active.elapsed_seconds += elapsed
+        close_task_span(active, now)
         active.status = "paused"
     elif action == "resume":
         if active.status != "paused":
@@ -446,9 +452,11 @@ def timer(request, data, prefs, now, active):
         check_room(request.user, prefs, now, active.deadline)
         active.resumed_at = now
         active.status = "running"
+        track_top_task(active, now)
     elif action == "finish":
         complete(active, prefs, now)
     elif action == "cancel":
+        close_task_span(active, now)
         active.status = "cancelled"
         active.ended_at = now
     else:
@@ -462,8 +470,8 @@ def review(request, data, prefs, now, active, pk):
     session = Session.objects.get(id=pk, user=request.user, status="completed")
     reflection = text(data, "reflection", 2000)
     splits = data.get("allocations")
-    if not isinstance(splits, list) or not 1 <= len(splits) <= 10:
-        raise ValueError("Add between one and ten tasks.")
+    if not isinstance(splits, list) or not 1 <= len(splits) <= 200:
+        raise ValueError("Add between one and 200 tasks.")
     allocations = []
     for split in splits:
         if not isinstance(split, dict):
