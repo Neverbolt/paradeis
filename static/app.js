@@ -378,8 +378,7 @@ function renderTimeline(container, day) {
           (item) =>
             Date.parse(item.start) <= now() && Date.parse(item.end) > now(),
         ) ||
-        all.find((item) => Date.parse(item.start) >= now()) ||
-        all.at(-1)
+        all.find((item) => Date.parse(item.start) >= now())
       : null;
   for (const item of all) {
     if (item === current) {
@@ -410,17 +409,15 @@ function renderTimeline(container, day) {
     else row.append(timelineCard(item));
     container.append(row);
   }
-  if (!container.childElementCount) {
-    if (day.date === state.today)
-      container.append(el("div", "now-marker", `Now · ${clock(now())}`));
-    container.append(el("p", "timeline-empty", "No sessions"));
-  }
+  if (day.date === state.today && !current)
+    container.append(el("div", "now-marker", `Now · ${clock(now())}`));
+  if (!all.length) container.append(el("p", "timeline-empty", "No sessions"));
   container.scrollTop = previousScroll;
-  if (container.id === "timeline" && !overviewVisible && current)
+  if (container.id === "timeline" && !overviewVisible && day.date === state.today)
     requestAnimationFrame(() => followCurrentTime(container));
 }
 function followCurrentTime(container) {
-  const row = container.querySelector(".current-time");
+  const row = container.querySelector(".current-time") || container.querySelector(".now-marker");
   if (!row || !container.clientHeight) return;
   const box = row.getBoundingClientRect(),
     parent = container.getBoundingClientRect();
@@ -827,9 +824,9 @@ $("recurrence-add").onclick = () => {
     kind: "meeting",
     frequency: "weekly",
     weekday:
-      new Date(state.today + "T12:00:00Z").getUTCDay() === 0
+      new Date(localDate(rounded) + "T12:00:00Z").getUTCDay() === 0
         ? 6
-        : new Date(state.today + "T12:00:00Z").getUTCDay() - 1,
+        : new Date(localDate(rounded) + "T12:00:00Z").getUTCDay() - 1,
     interval_weeks: 1,
     start: clock(rounded),
     end:
