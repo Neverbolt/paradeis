@@ -570,19 +570,21 @@ function extendable(s) {
         state.last_completed?.id === s.id))
   );
 }
+function currentBlock() {
+  return [state.live_block, state.next_block].find(block => block &&
+    Date.parse(block.start) <= now() && now() < Date.parse(block.end)) || null;
+}
 function tick() {
   if (!state) return;
   const taskRows = [...$("task-list").children];
   taskRows.forEach((row, index) => {
-    row.querySelector(".task-up").disabled = busy || index === 0;
-    row.querySelector(".task-down").disabled = busy || index === taskRows.length - 1;
-    row.querySelector(".task-handle").draggable = !busy && taskRows.length > 1;
+    const up = row.querySelector(".task-up"), down = row.querySelector(".task-down"),
+      handle = row.querySelector(".task-handle");
+    if (up) up.disabled = busy || index === 0;
+    if (down) down.disabled = busy || index === taskRows.length - 1;
+    if (handle) handle.draggable = !busy && taskRows.length > 1;
   });
-  const a = state.active,
-    block =
-      state.live_block && Date.parse(state.live_block.end) > now()
-        ? state.live_block
-        : null;
+  const a = state.active, block = currentBlock();
   const resting = !a && !block && Date.parse(state.break_until) > now();
   let seconds, mode, task, label;
   if (a) {
@@ -616,6 +618,14 @@ function tick() {
     task = state.tasks.find((t) => !t.done)?.title || "";
     label = "Start";
   }
+  const waiting = !a && !block && !resting && seconds < 1 &&
+    state.next_block && Date.parse(state.next_block.start) > now();
+  if (waiting) {
+    seconds = (Date.parse(state.next_block.start) - now()) / 1000;
+    mode = state.next_block.kind === "meeting" ? "Meeting soon" : "Break soon";
+    task = state.next_block.title;
+    label = `Starts at ${clock(state.next_block.start)}`;
+  }
   const tabTitle = titleMode() === "completion"
     ? completionTitle || "Paradeis"
     : `${duration(seconds)} · Paradeis`;
@@ -625,7 +635,7 @@ function tick() {
   $("timer-task").textContent = task;
   $("timer-main").textContent = label;
   $("timer-main").disabled =
-    busy ||
+    busy || waiting ||
     (!a && block && (block.kind === "break" || block.tracked)) ||
     (!a && !block && !resting && seconds < 1);
   $("timer-time").disabled = !!block && !a;
@@ -656,7 +666,8 @@ function tick() {
     }
   } else if (
     !a &&
-    ((state.live_block && !block) ||
+    ((state.live_block && Date.parse(state.live_block.end) <= now()) ||
+      (!state.live_block && state.next_block && Date.parse(state.next_block.start) <= now()) ||
       (state.break_until && !resting && Date.parse(state.break_until) <= now()))
   ) {
     if (now() - expiryRefresh > 1500) {
@@ -673,8 +684,7 @@ async function timerAction(action, extra = {}) {
   });
 }
 $("timer-main").onclick = () => {
-  const a = state.active,
-    b = state.live_block;
+  const a = state.active, b = currentBlock();
   if (a)
     timerAction(
       a.kind === "meeting"

@@ -237,6 +237,19 @@ class AppTests(TestCase):
             409,
         )
 
+    def test_meeting_handoff_when_short_break_uses_remaining_focus_time(self):
+        block = self.block(start=time(9, 2), end=time(9, 30))
+        before = self.client.get("/api/state/").json()
+        self.assertEqual(before["next_seconds"], 0)
+        self.assertIsNone(before["live_block"])
+        self.assertEqual(before["next_block"]["id"], block.id)
+        with patch("focus.views.timezone.now", return_value=NOW + timedelta(minutes=2)):
+            during = self.client.get("/api/state/").json()
+        self.assertEqual(during["live_block"]["id"], block.id)
+        session = self.start(NOW + timedelta(minutes=2), block_id=block.id)
+        self.assertEqual(session.kind, "meeting")
+        self.assertEqual(session.remaining_seconds, 28 * 60)
+
     def test_meeting_is_one_session_and_cannot_be_started_early_or_twice(self):
         block = self.block(start=time(9, 30), end=time(11))
         self.assertEqual(

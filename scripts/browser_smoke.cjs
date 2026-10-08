@@ -60,6 +60,34 @@ fs.mkdirSync("test-results", { recursive: true });
     assert.equal(await page.locator("#task-list .task-title").first().inputValue(), "Second browser task");
     await page.locator("#task-list .task-up").nth(1).click();
     await waitFor(() => document.querySelector("#task-list .task-title").value === "Browser task");
+    // Exercise the clock boundary independently of the real wall-clock hour.
+    await page.evaluate(async () => {
+      const snapshot = await (await fetch("/api/state/")).json();
+      const nativeFetch = window.fetch;
+      window.restoreMeetingFetch = () => { window.fetch = nativeFetch; };
+      const block = {id: 987654, kind: "meeting", title: "Boundary meeting",
+        start: new Date(Date.now() + 1500).toISOString(),
+        end: new Date(Date.now() + 300000).toISOString(), tracked: false};
+      window.fetch = async (url, options) => {
+        if (String(url).includes("/api/state/")) return new Response(JSON.stringify({
+          ...snapshot, now: new Date().toISOString(), active: null,
+          break_until: null, live_block: null, next_block: block}), {status: 200});
+        if (String(url).endsWith("/api/timer/")) {
+          window.boundaryMeetingRequest = JSON.parse(options.body);
+          return new Response(JSON.stringify({ok: true}), {status: 200});
+        }
+        return nativeFetch(url, options);
+      };
+      await refresh();
+    });
+    assert.equal(await page.locator("#timer-mode").textContent(), "Meeting soon");
+    assert(await page.locator("#timer-main").isDisabled());
+    await waitFor(() => document.querySelector("#timer-main").textContent === "Start meeting" &&
+      !document.querySelector("#timer-main").disabled);
+    await page.locator("#timer-main").click();
+    await waitFor(() => window.boundaryMeetingRequest && !document.querySelector("#timer-main").disabled);
+    assert.deepEqual(await page.evaluate(() => window.boundaryMeetingRequest), {action: "start", block_id: 987654});
+    await page.evaluate(async () => { window.restoreMeetingFetch(); await refresh(); });
     await page.locator("#overview-view").click();
     await page.waitForURL(base + "/overview");
     await page.waitForSelector(".calendar-day");
