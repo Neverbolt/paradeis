@@ -22,7 +22,7 @@ const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (e) => errors.push(e.message));
 let dom;
 const notifications = [];
-let delayNextNote = false, delayedNote, overrideToday;
+let delayNextNote = false, delayedNote, overrideToday, overrideState, boundaryStart;
 
 async function fetchWithCookies(url, options = {}) {
   const target = new URL(url, base).href;
@@ -69,7 +69,14 @@ async function waitFor(check, label) {
     virtualConsole,
     beforeParse(window) {
       window.fetch = async (url, options) => {
+        if (overrideState && String(url).endsWith("/api/timer/")) {
+          boundaryStart = JSON.parse(options.body);
+          return {ok: true, status: 200, json: async () => ({ok: true})};
+        }
         let response = await fetchWithCookies(url, options);
+        if (overrideState && String(url).includes("/api/state/")) {
+          response = { ok: true, status: 200, json: async () => overrideState() };
+        }
         if (overrideToday && String(url).includes("/api/state/")) {
           const data = await response.json();
           data.today = overrideToday;
@@ -383,6 +390,29 @@ async function waitFor(check, label) {
   assert.equal($("task-list").children.length, 2, "Pending tasks survive midnight");
   overrideToday = undefined;
   await w.refresh();
+  await w.loadDayNote();
+  // A stale pre-meeting snapshot must become actionable at the block's start,
+  // even before the ordinary 15-second state poll.
+  const realState = await w.api("state/");
+  const upcomingMeeting = {id: 987654, kind: "meeting", title: "Boundary meeting",
+    start: new Date(Date.now() + 1200).toISOString(),
+    end: new Date(Date.now() + 300000).toISOString(), tracked: false};
+  overrideState = () => ({...realState, now: new Date().toISOString(),
+    active: null, break_until: null, live_block: null, next_block: upcomingMeeting});
+  await w.refresh();
+  assert.equal($("timer-mode").textContent, "Meeting soon");
+  assert($("timer-main").disabled);
+  assert.notEqual($("timer-time").textContent, "0:00");
+  assert(!$("timer-ignore-break").hidden && !$("timer-ignore-break").disabled);
+  await waitFor(() => $("timer-main").textContent === "Start meeting" && !$("timer-main").disabled,
+    "meeting starts without waiting for the state poll");
+  $("timer-main").click();
+  await waitFor(() => boundaryStart, "meeting start request");
+  assert.equal(boundaryStart.action, "start");
+  assert.equal(boundaryStart.block_id, upcomingMeeting.id);
+  overrideState = undefined;
+  await w.refresh();
+  await waitFor(() => !$("timer-main").disabled, "timer ready after meeting boundary check");
   await w.loadDayNote();
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
