@@ -75,7 +75,8 @@ async function waitFor(check, label) {
         }
         let response = await fetchWithCookies(url, options);
         if (overrideState && String(url).includes("/api/state/")) {
-          response = { ok: true, status: 200, json: async () => overrideState() };
+          const snapshot = overrideState();
+          response = { ok: true, status: 200, json: async () => snapshot };
         }
         if (overrideToday && String(url).includes("/api/state/")) {
           const data = await response.json();
@@ -411,13 +412,14 @@ async function waitFor(check, label) {
   await waitFor(() => $("timer-main").textContent === "Start meeting" && !$("timer-main").disabled,
     "meeting starts without waiting for the state poll");
   $("timer-main").click();
-  await waitFor(() => boundaryStart, "meeting start request");
+  await waitFor(() => boundaryStart && w.eval("!busy"), "meeting start request settled");
   assert.equal(boundaryStart.action, "start");
   assert.equal(boundaryStart.block_id, upcomingMeeting.id);
   overrideState = undefined;
   await w.refresh();
   await waitFor(() => !$("timer-main").disabled, "timer ready after meeting boundary check");
   await w.loadDayNote();
+  await waitFor(() => w.eval("!busy"), "mutations settled before closing the test page");
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
     "PASS: login, tasks, timer, pause/resume, freeform sand review, overrun, notification, recurring blocks, bounded calendar, and day/week/month notes.",
