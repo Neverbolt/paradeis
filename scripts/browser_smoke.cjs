@@ -7,9 +7,10 @@ assert(["127.0.0.1", "localhost"].includes(new URL(base).hostname));
 fs.mkdirSync("test-results", { recursive: true });
 (async () => {
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
   });
+  const page = await context.newPage();
   async function waitFor(predicate, arg) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
