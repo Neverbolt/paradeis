@@ -7,9 +7,10 @@ assert(["127.0.0.1", "localhost"].includes(new URL(base).hostname));
 fs.mkdirSync("test-results", { recursive: true });
 (async () => {
   const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({
+  const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
   });
+  const page = await context.newPage();
   async function waitFor(predicate, arg) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
@@ -29,6 +30,18 @@ fs.mkdirSync("test-results", { recursive: true });
       page.getByRole("button", { name: "Sign in" }).click(),
     ]);
     await page.waitForSelector(".current-time");
+    await page.bringToFront();
+    await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
+    // Headless Chromium keeps page focus emulated across tabs; exercise the
+    // OS window events directly and verify their rendered effect.
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await waitFor(() => document.documentElement.classList.contains("window-unfocused"));
+    assert.equal(await page.locator("#timer-seconds").evaluate(el => getComputedStyle(el).opacity), "0.18");
+    assert.equal(await page.locator("#timer-minutes").evaluate(el => getComputedStyle(el).opacity), "1");
+    await page.screenshot({path: "test-results/unfocused-timer.png"});
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
+    assert.equal(await page.locator("#timer-seconds").evaluate(el => getComputedStyle(el).opacity), "1");
     await page.locator("#task-title").fill("Browser task");
     await page.locator("#task-form button").click();
     await page.waitForSelector("#task-list .task-check");
@@ -247,9 +260,20 @@ fs.mkdirSync("test-results", { recursive: true });
       .getByRole("button", { name: "Review Results meeting", exact: true })
       .click();
     await page.waitForSelector("#review-dialog[open]");
-    await page.locator("#allocations input").fill("Decision reached");
-    await page.getByRole("button", { name: "3 sand", exact: true }).click();
+    await page.locator("#allocations input").first().fill("Decision reached");
+    await page.getByRole("button", { name: "3 sand", exact: true }).first().click();
+    assert.equal(await page.locator("#allocations input").count(), 2);
+    assert(await page.locator("#allocations .sand-control").last().isHidden());
+    await page.locator("#allocations input").last().fill("Follow-up");
+    assert.equal(await page.locator("#allocations input").count(), 3);
+    assert(await page.locator("#allocations .sand-control").nth(1).isVisible());
+    await page.locator("#allocations .sand-control").nth(1).getByRole("button", {name: "1 sand", exact: true}).click();
+    assert.equal(await page.locator("#allocation-total").textContent(), "4 / 5 sand");
+    await page.locator("#allocations input").nth(1).fill("");
+    assert.equal(await page.locator("#allocation-total").textContent(), "3 / 5 sand");
     await page.locator("#review-reflection").fill("Next steps agreed");
+    assert.equal(await page.locator("#allocations input").count(), 2);
+    await page.screenshot({path: "test-results/review-auto-row.png"});
     await page.locator('#review-form button[type="submit"]').click();
     await page.waitForSelector("#review-dialog[open]", { state: "hidden" });
     await page.waitForSelector("#timeline .item-note");
