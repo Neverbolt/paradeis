@@ -32,16 +32,16 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector(".current-time");
     await page.bringToFront();
     await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
-    const otherTab = await page.context().newPage();
-    await otherTab.bringToFront();
+    // Headless Chromium keeps page focus emulated across tabs; exercise the
+    // OS window events directly and verify their rendered effect.
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
     await waitFor(() => document.documentElement.classList.contains("window-unfocused"));
     assert.equal(await page.locator("#timer-seconds").evaluate(el => getComputedStyle(el).opacity), "0.18");
     assert.equal(await page.locator("#timer-minutes").evaluate(el => getComputedStyle(el).opacity), "1");
     await page.screenshot({path: "test-results/unfocused-timer.png"});
-    await page.bringToFront();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
     await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
     assert.equal(await page.locator("#timer-seconds").evaluate(el => getComputedStyle(el).opacity), "1");
-    await otherTab.close();
     await page.locator("#task-title").fill("Browser task");
     await page.locator("#task-form button").click();
     await page.waitForSelector("#task-list .task-check");
