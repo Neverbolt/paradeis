@@ -240,11 +240,15 @@ async function waitFor(check, label) {
     () => $("review-dialog").open,
     "entire pending review card clickable",
   );
-  await click("allocation-add");
   const rows = [...w.document.querySelectorAll(".allocation-row")];
   assert.equal(rows.length, 2);
   rows[0].querySelector(".sand-control button:nth-child(3)").click();
+  assert(rows[1].querySelector(".sand-control").hidden);
   rows[1].querySelector("input").value = `Review notes ${suffix}`;
+  rows[1].querySelector("input").dispatchEvent(new w.Event("input", {bubbles: true}));
+  assert(!rows[1].querySelector(".sand-control").hidden);
+  assert.equal($("allocations").children.length, 3);
+  assert($("allocations").lastElementChild.querySelector(".sand-control").hidden);
   rows[1].querySelector(".sand-control button:nth-child(1)").click();
   assert.equal($("allocation-total").textContent, "4 / 5 sand");
   assert(

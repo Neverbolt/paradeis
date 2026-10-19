@@ -1165,3 +1165,7 @@ dialog::backdrop {
 .task-actions button:disabled {
   opacity: .25;
 }
+
+.window-unfocused #timer-seconds {
+  opacity: .18;
+}

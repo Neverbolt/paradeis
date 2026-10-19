@@ -630,7 +630,9 @@ function tick() {
     ? completionTitle || "Paradeis"
     : `${duration(seconds)} · Paradeis`;
   if (document.title !== tabTitle) document.title = tabTitle;
-  $("timer-time").textContent = duration(seconds);
+  const [minutes, secondPart] = duration(seconds).split(":");
+  $("timer-minutes").textContent = minutes;
+  $("timer-seconds").textContent = `:${secondPart}`;
   $("timer-mode").textContent = mode;
   $("timer-task").textContent = task;
   $("timer-main").textContent = label;
@@ -760,6 +762,8 @@ function openReview(s) {
     ? s.allocations
     : [{ label: s.title, sand: 0 }])
     addAllocation(a);
+  addAllocation();
+  updateSand();
   $("review-overrun").hidden = !!state.active || !extendable(s);
   openDialog($("review-dialog"));
 }
@@ -771,8 +775,17 @@ function addAllocation(a = {}) {
   input.value = a.label || "";
   input.placeholder = "Task";
   input.maxLength = 200;
-  input.required = true;
   input.setAttribute("aria-label", "Task worked on");
+  input.oninput = () => {
+    for (const field of $("allocations").querySelectorAll("input")) field.setCustomValidity("");
+    updateSand();
+  };
+  input.onblur = () => {
+    if (!input.value.trim() && row !== $("allocations").lastElementChild) {
+      row.remove();
+      updateSand();
+    }
+  };
   const control = el("div", "sand-control");
   for (let i = 1; i <= 5; i++)
     control.append(
@@ -793,22 +806,29 @@ function addAllocation(a = {}) {
       "×",
       "icon-button muted",
       () => {
-        if ($("allocations").childElementCount > 1) {
-          row.remove();
-          updateSand();
-        }
+        row.remove();
+        updateSand();
       },
       "Remove task",
     ),
   );
   $("allocations").append(row);
-  updateSand();
 }
 function updateSand() {
-  const rows = [...$("allocations").children],
-    total = rows.reduce((n, r) => n + Number(r.dataset.sand), 0);
+  const list = $("allocations");
+  if (!list.lastElementChild || list.lastElementChild.querySelector("input").value.trim())
+    addAllocation();
+  const rows = [...list.children];
+  const filled = rows.filter(r => r.querySelector("input").value.trim());
+  for (const r of rows) {
+    const empty = !r.querySelector("input").value.trim();
+    if (empty) r.dataset.sand = 0;
+    r.querySelector(".sand-control").hidden = empty;
+    r.querySelector('[aria-label="Remove task"]').hidden = empty;
+    r.querySelector("input").disabled = empty && filled.length >= 200;
+  }
+  const total = filled.reduce((n, r) => n + Number(r.dataset.sand), 0);
   $("allocation-total").textContent = `${total} / 5 sand`;
-  $("allocation-add").disabled = rows.length >= 200;
   for (const r of rows)
     r.querySelectorAll(".sand-control button").forEach((b, index) => {
       const value = index + 1,
@@ -818,19 +838,22 @@ function updateSand() {
       b.disabled = value > count && total - count + value > 5;
     });
 }
-$("allocation-add").onclick = () => {
-  addAllocation();
-  $("allocations").lastChild.querySelector("input").focus();
-};
 $("review-form").onsubmit = async (e) => {
   e.preventDefault();
+  const filled = [...$("allocations").children].filter(r => r.querySelector("input").value.trim());
+  if (!filled.length) {
+    const input = $("allocations").querySelector("input");
+    input.setCustomValidity("Add a task worked on before saving.");
+    input.reportValidity();
+    return;
+  }
   await mutate(
     `sessions/${reviewing.id}/review/`,
     {
       reflection: $("review-reflection").value,
-      allocations: [...$("allocations").children].map((r) => ({
+      allocations: filled.map((r) => ({
         task_id: r.dataset.taskId ? Number(r.dataset.taskId) : null,
-        label: r.querySelector("input").value,
+        label: r.querySelector("input").value.trim(),
         sand: Number(r.dataset.sand),
       })),
     },
@@ -1454,7 +1477,15 @@ window.addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+function updateWindowFocus() {
+  document.documentElement.classList.toggle("window-unfocused",
+    document.hidden || !document.hasFocus());
+}
+window.addEventListener("blur", () => document.documentElement.classList.add("window-unfocused"));
+window.addEventListener("focus", updateWindowFocus);
+updateWindowFocus();
 document.addEventListener("visibilitychange", () => {
+  updateWindowFocus();
   if (!document.hidden) refresh().catch(showError);
 });
 setInterval(tick, 250);
