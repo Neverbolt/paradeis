@@ -435,7 +435,54 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator("#timer-finish").click();
       await page.waitForSelector("#review-dialog[open]");
       await waitFor(() => !busy);
-      await page.getByRole("button", {name: "Close review", exact: true}).click();
+      const ratedSessionId = await page.evaluate(() => reviewing.id);
+      assert(await page.locator('#review-focus').isVisible());
+      assert.deepEqual(await page.locator('#focus-control .lens-icon').evaluateAll(icons =>
+        icons.map(icon => icon.getBoundingClientRect().width)), [7, 10, 13]);
+      await page.locator('#focus-control button').nth(1).click();
+      await page.locator('#focus-control button').nth(1).click();
+      assert.equal(await page.locator('#focus-control').getAttribute('aria-label'), 'Focus 0 out of 3');
+      await page.locator('#focus-control button').nth(2).click();
+      await page.locator('#focus-control button').nth(1).click();
+      await page.locator('#allocations .sand-control button').nth(2).click();
+      await page.locator('#review-reflection').fill('Focused Strategy');
+      await page.screenshot({path: 'test-results/focus-review-1280.png'});
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await page.locator('#review-dialog').evaluate(dialog => dialog.scrollWidth <= dialog.clientWidth));
+      await page.screenshot({path: 'test-results/focus-review-390.png'});
+      await page.locator('#review-form button[type=submit]').click();
+      await page.waitForSelector('#review-dialog[open]', {state: 'hidden'});
+      await waitFor(() => !busy);
+      const ratedSession = await page.evaluate(async id => (await api('state/')).day.sessions.find(s => s.id === id), ratedSessionId);
+      assert.equal(ratedSession.focus_score, 2);
+      assert.equal(ratedSession.effort, 3);
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({width, height: 844});
+        const ratedCard = page.locator('#timeline .has-focus-lenses').first();
+        await ratedCard.scrollIntoViewIfNeeded();
+        assert(await ratedCard.evaluate(card => {
+          const lenses = [...card.querySelectorAll('.focus-lenses .lens-icon')].map(icon => icon.getBoundingClientRect());
+          const piles = [...card.querySelectorAll('.session-metrics .sand-grain')].map(icon => icon.getBoundingClientRect());
+          const bounds = card.getBoundingClientRect();
+          return lenses.length === 2 && lenses[0].width === 7 && lenses[1].width === 10 &&
+            piles.length === 3 && piles[0].height !== piles[1].height &&
+            lenses.every(lens => lens.bottom <= piles[0].top) &&
+            [...lenses, ...piles].every(icon => icon.right <= bounds.right && icon.left >= bounds.left);
+        }), 'Lenses sit above the original uneven sand piles');
+        await page.screenshot({path: `test-results/focus-timeline-${width}.png`});
+      }
+      await page.setViewportSize({width: 1280, height: 800});
+      assert(await page.evaluate(() => {
+        const times = [...entries(state.day), ...state.day.blocks.filter(b => b.kind === 'work')].map(item => Date.parse(item.end));
+        const marker = document.querySelector('#timeline .timeline-end .timeline-time');
+        const rowTime = document.querySelector('#timeline > .timeline-row .timeline-time');
+        return marker.textContent === clock(Math.max(...times)) &&
+          Math.abs(marker.getBoundingClientRect().right - rowTime.getBoundingClientRect().right) < 1 &&
+          state.day.plan.at(-1)?.kind !== 'break';
+      }), 'Day end aligns with the time column and has no trailing planned break');
+      await page.locator('#timeline .has-focus-lenses').first().click();
+      assert.equal(await page.locator('#focus-control [aria-pressed=true]').count(), 2);
+      await page.getByRole('button', {name: 'Close review', exact: true}).click();
       assert.equal(await page.locator("#timer-main").textContent(), "Start break");
       await page.locator("#timer-main").click();
       await waitFor(() => !busy && document.querySelector("#timer-main").textContent === "Skip break");

@@ -527,6 +527,11 @@ def timer(request, data, prefs, now, active):
 def review(request, data, prefs, now, active, pk):
     session = Session.objects.get(id=pk, user=request.user, status="completed")
     reflection = text(data, "reflection", 2000)
+    focus_score = session.focus_score
+    if "focus_score" in data:
+        focus_score = None if data["focus_score"] is None else integer(data, "focus_score", 0, 3)
+        if session.kind != "focus" and focus_score is not None:
+            raise ValueError("Focus ratings are only for focus sessions.")
     splits = data.get("allocations")
     if not isinstance(splits, list) or not 1 <= len(splits) <= 200:
         raise ValueError("Add between one and 200 tasks.")
@@ -550,6 +555,7 @@ def review(request, data, prefs, now, active, pk):
     session.allocations.all().delete()
     Allocation.objects.bulk_create(allocations)
     session.effort, session.reflection, session.reviewed = effort, reflection, True
+    session.focus_score = focus_score
     session.title = " + ".join(a.label for a in allocations)[:200]
     session.save()
     return JsonResponse({"ok": True})

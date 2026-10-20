@@ -861,15 +861,10 @@ dialog::backdrop {
 .sand-control button:disabled {
   opacity: 0.3;
 }
-.review-tools {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin: 10px 0;
-}
 .review-dialog textarea {
   font-size: 12px;
   min-height: 35px;
+  margin-top: 10px;
 }
 .inline-label {
   display: flex;
@@ -1224,3 +1219,24 @@ dialog::backdrop {
 .recurrence-card-dates {color: var(--muted);}
 .recurrence-card:hover {filter: brightness(.97);}
 .recurrence-card:focus-visible {outline: 2px solid var(--green); outline-offset: -2px;}
+
+.lens-icon {display: inline-block; position: relative; width: var(--lens-size); height: var(--lens-size); border: 1px solid currentColor; border-radius: 50%; flex-shrink: 0;}
+.lens-icon::after {content: ""; position: absolute; inset: 22%; border: 1px solid currentColor; border-radius: 50%;}
+.focus-lenses {display: inline-flex; align-items: flex-end; gap: 3px; min-height: 13px; color: var(--green);}
+.session-metrics {position: absolute; right: 10px; bottom: 7px; display: flex; flex-direction: column; align-items: flex-end; gap: 3px;}
+.session-metrics .sand-pile {align-items: flex-end;}
+.timeline-item.has-session-metrics {position: relative; padding-right: 72px;}
+.timeline-item.has-focus-lenses {min-height: 43px;}
+.calendar-day .timeline-item.has-session-metrics {padding-right: 64px;}
+.calendar-day .session-metrics {right: 6px; bottom: 5px;}
+.review-footer {align-items: center; gap: 8px; flex-wrap: wrap;}
+.review-focus {display: flex; align-items: center; gap: 7px; margin-right: auto; font-size: 12px; color: var(--muted);}
+.focus-control {display: flex; align-items: flex-end;}
+.focus-choice {display: flex; align-items: flex-end; justify-content: center; width: 27px; height: 30px; padding: 0 0 6px; color: #c6cfbd; border-radius: 5px;}
+.focus-choice[aria-pressed="true"] {color: var(--green);}
+.focus-choice:hover {background: #edf1e6;}
+.timeline-end {display: grid; grid-template-columns: 37px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 4px; padding: 4px 0 7px; flex-shrink: 0;}
+.timeline-end .timeline-time {padding-top: 0; color: var(--muted);}
+.timeline-end-label {display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 9px;}
+.timeline-end-label::before {content: ""; flex: 1; border-top: 1px solid var(--line);}
+.calendar-day .timeline-end {grid-template-columns: 11px minmax(0, 1fr); gap: 4px; min-height: 32px;}
