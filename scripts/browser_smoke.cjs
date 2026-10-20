@@ -168,7 +168,9 @@ fs.mkdirSync("test-results", { recursive: true });
             if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) return false;
           }
         }
-        return document.documentElement.scrollWidth <= window.innerWidth;
+        const scroll = document.querySelector('#recurrence-list');
+        return document.documentElement.scrollWidth <= window.innerWidth &&
+          (window.innerWidth < 1000 || scroll.scrollWidth <= scroll.clientWidth + 1);
       }), 'Recurring cards stay separate, with scrolling inside the week');
       await page.locator('#recurrence-list').evaluate(list => list.scrollTop = list.scrollHeight);
       await page.screenshot({path: `test-results/recurring-week-${width}.png`});

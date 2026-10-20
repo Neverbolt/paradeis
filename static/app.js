@@ -1033,7 +1033,9 @@ function renderRecurrenceWeek() {
   const end = Math.ceil(Math.max(minutes(state.preferences.day_end),
     ...days.flat().map(item => item.end)) / 60) * 60;
   week.replaceChildren();
-  week.style.gridTemplateColumns = `44px ${days.map(items => `${Math.max(150, ...items.map(item => item.columns * 120))}px`).join(" ")}`;
+  const widths = days.map(items => Math.max(112, ...items.map(item => item.columns * 120)));
+  week.style.gridTemplateColumns = `44px ${widths.map(width => `minmax(${width}px, 1fr)`).join(" ")}`;
+  week.style.minWidth = `max(100%, ${44 + widths.reduce((sum, width) => sum + width, 0)}px)`;
   week.style.setProperty("--schedule-height", `${end - start}px`);
   week.dataset.month = today.slice(0, 7);
   $("recurring-month").textContent = `${dateLabel(month(today), {month: "long", year: "numeric"})} · ${templates.length} schedules`;

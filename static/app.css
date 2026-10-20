@@ -1211,7 +1211,7 @@ dialog::backdrop {
 #recurring-month {margin: 0;}
 .recurring-help {margin: 0 0 12px; max-width: 700px;}
 .recurrence-scroll {overflow: auto; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 10px; scrollbar-width: thin;}
-.recurrence-week {display: grid; width: max-content; min-width: 100%; padding-bottom: 14px;}
+.recurrence-week {display: grid; width: 100%; min-width: 100%; padding-bottom: 14px;}
 .recurrence-day {min-width: 0; border-left: 1px solid var(--line);}
 .recurrence-day-heading {position: sticky; top: 0; z-index: 2; height: 38px; margin: 0; padding: 11px 7px; font-size: 11px; font-weight: 600; background: var(--paper, #fafbf7); border-bottom: 1px solid var(--line);}
 .recurrence-ruler .recurrence-day-heading {font-size: 9px; color: var(--muted);}
