@@ -89,7 +89,6 @@ function checkWorkWrappingUI(w) {
     assert.equal(container.querySelector(".now-marker").closest(".work-reservation"), groups[0]);
     assert.equal(groups[0].querySelector(".work-reservation-range").textContent,
       `${w.clock(day.blocks[0].start)}–${w.clock(day.blocks[0].end)}`);
-    assert.equal(groups[0].lastElementChild.textContent, w.clock(day.blocks[0].end));
     assert.equal(container.firstElementChild, card("Before Work").parentElement);
     assert.equal(groups[1].nextElementSibling, card("After Work").parentElement);
   }

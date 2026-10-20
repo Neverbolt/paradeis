@@ -487,9 +487,7 @@ function renderTimeline(container, day) {
       el("strong", "work-reservation-title", work.title),
       el("span", "work-reservation-range", `${clock(work.start)}–${clock(work.end)}`));
     const body = el("div", "work-reservation-items");
-    const end = el("div", "work-reservation-end", clock(work.end));
-    end.setAttribute("aria-label", `End of ${work.title} at ${clock(work.end)}`);
-    group.append(heading, body, end);
+    group.append(heading, body);
     groups.set(work.id, body);
     units.push({start: Date.parse(work.start), node: group});
   }

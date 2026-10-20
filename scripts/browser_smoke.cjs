@@ -387,7 +387,6 @@ fs.mkdirSync("test-results", { recursive: true });
       assert(await work.locator('.work-reservation-items .timeline-row').count() >= 2);
       assert.equal(await work.getByRole('button', {name: 'Edit Strategy call', exact: true}).count(), 1);
       assert.equal(await work.locator('.work-reservation-range').textContent(), `${workWindow.start}–${workWindow.end}`);
-      assert.equal(await work.locator('.work-reservation-end').textContent(), workWindow.end);
       await work.locator('.work-reservation-heading').click();
       assert.equal(await page.locator('#block-name').inputValue(), 'Strategy');
       await page.getByRole('button', {name: 'Close block editor', exact: true}).click();
