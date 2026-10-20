@@ -1211,10 +1211,15 @@ dialog::backdrop {
 .recurrence-ruler .recurrence-day-heading {font-size: 9px; color: var(--muted);}
 .recurrence-day-slots {position: relative; height: var(--schedule-height); background: repeating-linear-gradient(to bottom, transparent 0 59px, var(--line) 59px 60px);}
 .recurrence-hour {position: absolute; right: 5px; font-size: 9px; font-variant-numeric: tabular-nums; color: var(--muted); transform: translateY(2px);}
-.recurrence-card {position: absolute; display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid #cbd3c2; border-radius: 7px; background: #eaf0e3; text-align: left; font-size: 10px; line-height: 1.25; overflow: auto; overflow-wrap: anywhere;}
-.recurrence-card strong {font-size: 11px;}
-.recurrence-card.work {border: 1px dashed var(--green); background: #f1f4ec;}
-.recurrence-card.break {border-color: #ddd5bc; background: #f6f2e5;}
+.recurrence-card {position: absolute; display: block; padding: 0; border: 0; outline: 1px solid #cbd3c2; outline-offset: -1px; border-radius: 4px; background: #eaf0e3; text-align: left; font-size: 10px; line-height: 11px; overflow: hidden;}
+.recurrence-card-body {display: flex; flex-direction: column; gap: 1px; padding: 3px 5px;}
+.recurrence-card-body > * {display: block; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+.recurrence-card.compact .recurrence-card-body {padding: 1px 4px;}
+.recurrence-card.compact .recurrence-card-body > span {display: none;}
+.recurrence-card.brief .recurrence-card-detail, .recurrence-card.brief .recurrence-card-dates {display: none;}
+.recurrence-card strong {font-size: 11px; line-height: 12px;}
+.recurrence-card.work {outline: 1px dashed var(--green); background: #f1f4ec;}
+.recurrence-card.break {outline-color: #ddd5bc; background: #f6f2e5;}
 .recurrence-card-time {font-variant-numeric: tabular-nums; color: var(--green);}
 .recurrence-card-dates {color: var(--muted);}
 .recurrence-card:hover {filter: brightness(.97);}

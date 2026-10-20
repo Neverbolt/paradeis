@@ -146,7 +146,11 @@ async function checkSchedulingUI(w) {
   assert(lanes.slice(0, 3).every(item => item.columns === 2));
   assert.equal(lanes[3].columns, 1, "Adjacent clusters use the full width");
   const tiny = w.recurrenceLayout([pattern(1, "09:00", "09:05"), pattern(2, "09:05", "09:10")]);
-  assert.equal(tiny[0].columns, 2, "Short cards cannot cover nearby cards");
+  assert(tiny.every(item => item.columns === 1), "Adjacent short blocks share one lane");
+  const lengths = w.recurrenceLayout([pattern(1, "09:00", "09:05"), pattern(2, "09:00", "09:15"),
+    pattern(3, "09:00", "09:30"), pattern(4, "09:00", "10:00"), pattern(5, "09:00", "11:00")]);
+  assert.deepEqual(Array.from(lengths, item => item.end - item.start), [5, 15, 30, 60, 120]);
+  assert(lengths.every(item => item.columns === 5), "Actual overlaps retain separate lanes");
   const dates = w.recurrenceMonthDates({frequency: "weekly", weekday: 2, interval_weeks: 4,
     anchor_date: "2026-09-09", effective_from: "2026-09-09"}, "2026-10-20");
   assert.deepEqual(Array.from(dates), ["2026-10-07"], "Four-week patterns show this month's actual dates");
