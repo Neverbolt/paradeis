@@ -21,6 +21,8 @@ const errors = [];
 const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (e) => errors.push(e.message));
 let dom;
+let pendingApiCalls = 0;
+const appIntervals = new Set();
 const notifications = [];
 let delayNextNote = false, delayedNote, overrideToday, overrideState, boundaryStart;
 
@@ -238,6 +240,12 @@ async function checkSchedulingUI(w) {
     pretendToBeVisual: true,
     virtualConsole,
     beforeParse(window) {
+      const nativeInterval = window.setInterval.bind(window);
+      window.setInterval = (...args) => {
+        const id = nativeInterval(...args);
+        appIntervals.add(id);
+        return id;
+      };
       window.fetch = async (url, options) => {
         if (overrideState && String(url).endsWith("/api/timer/")) {
           boundaryStart = JSON.parse(options.body);
@@ -285,6 +293,13 @@ async function checkSchedulingUI(w) {
     },
   });
   const w = dom.window;
+  await waitFor(() => typeof w.api === 'function', 'application script ready');
+  const originalApi = w.api;
+  w.api = async (...args) => {
+    pendingApiCalls++;
+    try { return await originalApi(...args); }
+    finally { pendingApiCalls--; }
+  };
   const $ = (id) => w.document.getElementById(id);
   const click = async (id) => {
     await waitFor(() => !$(id).disabled, `${id} ready`);
@@ -624,4 +639,16 @@ async function checkSchedulingUI(w) {
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => dom?.window.close());
+  .finally(async () => {
+    if (!dom) return;
+    // Stop polling and let already-started refreshes finish before JSDOM tears
+    // down document. Otherwise a successful run can fail in a late callback.
+    for (const id of appIntervals) dom.window.clearInterval(id);
+    await waitFor(async () => {
+      const idle = () => pendingApiCalls === 0 && dom.window.eval('!busy && !loadingCalendar');
+      if (!idle()) return false;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return idle();
+    }, 'background refreshes settled');
+    dom.window.close();
+  });
