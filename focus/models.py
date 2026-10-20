@@ -123,6 +123,7 @@ class Session(models.Model):
     resumed_at = models.DateTimeField()
     break_until = models.DateTimeField(null=True)
     effort = models.PositiveSmallIntegerField(null=True)
+    focus_score = models.PositiveSmallIntegerField(null=True, blank=True)
     reflection = models.TextField(blank=True, max_length=2000)
     reviewed = models.BooleanField(default=False)
     pending_break_seconds = models.PositiveIntegerField(default=0)
@@ -145,6 +146,10 @@ class Session(models.Model):
             ),
             models.CheckConstraint(
                 condition=Q(effort__isnull=True) | Q(effort__lte=5), name="effort_zero_to_five"
+            ),
+            models.CheckConstraint(
+                condition=Q(focus_score__isnull=True) | Q(focus_score__lte=3),
+                name="focus_zero_to_three",
             ),
         ]
 

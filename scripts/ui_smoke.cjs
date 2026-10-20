@@ -21,6 +21,8 @@ const errors = [];
 const virtualConsole = new VirtualConsole();
 virtualConsole.on("jsdomError", (e) => errors.push(e.message));
 let dom;
+let pendingApiCalls = 0;
+const appIntervals = new Set();
 const notifications = [];
 let delayNextNote = false, delayedNote, overrideToday, overrideState, boundaryStart;
 
@@ -91,7 +93,49 @@ function checkWorkWrappingUI(w) {
       `${w.clock(day.blocks[0].start)}–${w.clock(day.blocks[0].end)}`);
     assert.equal(container.firstElementChild, card("Before Work").parentElement);
     assert.equal(groups[1].nextElementSibling, card("After Work").parentElement);
+    assert.equal(container.querySelectorAll('.timeline-end').length, 1);
+    assert.equal(container.querySelector('.timeline-end .timeline-time').textContent, w.clock(day.blocks[2].end));
   }
+}
+
+async function checkFocusRatingsUI(w) {
+  const $ = id => w.document.getElementById(id);
+  let session = (await w.api("state/")).day.sessions.find(s => s.kind === "focus" && s.status === "completed");
+  if (!session) {
+    const started = await w.api("timer/", {action: "start", ignore_break: true});
+    await w.api("timer/", {action: "finish", id: started.id});
+    session = (await w.api("state/")).day.sessions.find(s => s.id === started.id);
+  }
+  await w.refresh();
+  w.openReview(session);
+  assert.equal($("focus-control").children.length, 3);
+  assert(!$("review-focus").hidden);
+  assert(!$("review-dialog").querySelector('.review-footer').textContent.includes('/'));
+  const choices = [...$("focus-control").children];
+  assert.deepEqual(choices.map(b => b.querySelector('i').style.getPropertyValue('--lens-size')), ['7px', '10px', '13px']);
+  choices[0].click();
+  $("focus-control").children[1].click();
+  assert.equal($("focus-control").getAttribute('aria-label'), 'Focus 2 out of 3');
+  $("focus-control").children[1].click();
+  assert.equal($("focus-control").getAttribute('aria-label'), 'Focus 0 out of 3');
+  $("review-form").requestSubmit();
+  await waitFor(() => !$("review-dialog").open && w.eval('!busy'), 'save zero focus');
+  session = (await w.api("state/")).day.sessions.find(s => s.id === session.id);
+  assert.equal(session.focus_score, 0);
+  w.openReview(session);
+  assert.equal($("focus-control").querySelectorAll('[aria-pressed="true"]').length, 0);
+  $("focus-control").children[2].click();
+  $("review-form").requestSubmit();
+  await waitFor(() => !$("review-dialog").open && w.eval('!busy'), 'save three lenses');
+  const saved = (await w.api("state/")).day.sessions.find(s => s.id === session.id);
+  assert.equal(saved.focus_score, 3);
+  assert.equal(saved.effort, session.effort ?? 0);
+  const icons = $("timeline").querySelector('.focus-lenses[aria-label="Focus 3 out of 3"]');
+  assert.equal(icons.children.length, 3);
+  assert.equal(icons.parentElement.lastElementChild.className, 'sand-pile');
+  w.openReview(saved);
+  assert.equal($("focus-control").querySelectorAll('[aria-pressed="true"]').length, 3);
+  $("review-dialog").close();
 }
 
 async function checkSchedulingUI(w) {
@@ -122,6 +166,8 @@ async function checkSchedulingUI(w) {
   // Exercise real Work defaults, a newly reserved meeting, and manual breaks.
   await w.api("timer/", {action: "skip_break"});
   await w.api("timer/", {action: "configure_auto", auto_focus: false, auto_break: true});
+  await checkFocusRatingsUI(w);
+  await w.api("timer/", {action: "skip_break"});
   await w.refresh();
   const workStart = Math.floor(Date.parse((await w.api("state/")).now) / 60000) * 60000;
   const workEnd = workStart + 60 * 60000;
@@ -194,6 +240,12 @@ async function checkSchedulingUI(w) {
     pretendToBeVisual: true,
     virtualConsole,
     beforeParse(window) {
+      const nativeInterval = window.setInterval.bind(window);
+      window.setInterval = (...args) => {
+        const id = nativeInterval(...args);
+        appIntervals.add(id);
+        return id;
+      };
       window.fetch = async (url, options) => {
         if (overrideState && String(url).endsWith("/api/timer/")) {
           boundaryStart = JSON.parse(options.body);
@@ -241,6 +293,13 @@ async function checkSchedulingUI(w) {
     },
   });
   const w = dom.window;
+  await waitFor(() => typeof w.api === 'function', 'application script ready');
+  const originalApi = w.api;
+  w.api = async (...args) => {
+    pendingApiCalls++;
+    try { return await originalApi(...args); }
+    finally { pendingApiCalls--; }
+  };
   const $ = (id) => w.document.getElementById(id);
   const click = async (id) => {
     await waitFor(() => !$(id).disabled, `${id} ready`);
@@ -389,6 +448,7 @@ async function checkSchedulingUI(w) {
     "Five-sand budget enforced",
   );
   $("review-reflection").value = "Progress";
+  $("focus-control").children[1].click();
   $("review-reflection").dispatchEvent(new w.KeyboardEvent("keydown", {
     key: "Enter", ctrlKey: true, bubbles: true, cancelable: true,
   }));
@@ -579,4 +639,16 @@ async function checkSchedulingUI(w) {
     console.error(error);
     process.exitCode = 1;
   })
-  .finally(() => dom?.window.close());
+  .finally(async () => {
+    if (!dom) return;
+    // Stop polling and let already-started refreshes finish before JSDOM tears
+    // down document. Otherwise a successful run can fail in a late callback.
+    for (const id of appIntervals) dom.window.clearInterval(id);
+    await waitFor(async () => {
+      const idle = () => pendingApiCalls === 0 && dom.window.eval('!busy && !loadingCalendar');
+      if (!idle()) return false;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return idle();
+    }, 'background refreshes settled');
+    dom.window.close();
+  });

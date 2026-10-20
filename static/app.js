@@ -6,6 +6,7 @@ let state,
   busy = false,
   overviewVisible = false,
   recurringVisible = false;
+let reviewFocus = null;
 let reviewing,
   editingBlock,
   templates = [],
@@ -47,6 +48,19 @@ function sand(value) {
   n.setAttribute("aria-label", `${value || 0} sand`);
   for (let i = 0; i < (value || 0); i++) n.append(el("i", "sand-grain"));
   return n;
+}
+function lens(size) {
+  const icon = el("i", "lens-icon");
+  icon.style.setProperty("--lens-size", `${[7, 10, 13][size - 1]}px`);
+  icon.setAttribute("aria-hidden", "true");
+  return icon;
+}
+function lenses(value) {
+  const icons = el("span", "focus-lenses");
+  icons.setAttribute("aria-label", `Focus ${value} out of 3`);
+  icons.title = `Focus: ${value} out of 3`;
+  for (let i = 1; i <= value; i++) icons.append(lens(i));
+  return icons;
 }
 const now = () => Date.now() + serverOffset;
 function shiftDay(day, amount) {
@@ -468,7 +482,17 @@ function timelineCard(item) {
   if (item.reflection)
     details.append(el("span", "item-note", ` · ${item.reflection}`));
   meta.append(details);
-  if (item.status === "completed") meta.append(sand(item.effort));
+  if (item.status === "completed") {
+    if (item.kind === "focus" && item.focus_score > 0) {
+      const metrics = el("span", "session-metrics");
+      card.classList.add("has-session-metrics", "has-focus-lenses");
+      metrics.append(lenses(item.focus_score), sand(item.effort));
+      meta.append(metrics);
+    } else {
+      meta.append(sand(item.effort));
+      if (item.kind === "focus" && item.focus_score === 0) card.title = "Focus: 0 out of 3";
+    }
+  }
   card.append(meta);
   return card;
 }
@@ -552,6 +576,13 @@ function renderTimeline(container, day) {
   units.sort((a, b) => a.start - b.start);
   container.append(...units.map(unit => unit.node));
   if (!all.length && !works.length) container.append(el("p", "timeline-empty", "No sessions"));
+  if (all.length || works.length) {
+    const end = Math.max(...[...all, ...works].map(item => Date.parse(item.end)));
+    const marker = el("div", "timeline-end");
+    marker.setAttribute("aria-label", `Day ends at ${clock(end)}`);
+    marker.append(el("span", "timeline-time", clock(end)), el("span", "timeline-end-label", "End"));
+    container.append(marker);
+  }
   container.scrollTop = previousScroll;
   if (container.id === "timeline" && !overviewVisible && day.date === state.today)
     requestAnimationFrame(() => followCurrentTime(container));
@@ -840,6 +871,9 @@ async function timerActionResult(seconds) {
 }
 function openReview(s) {
   reviewing = s;
+  reviewFocus = s.focus_score ?? null;
+  $("review-focus").hidden = s.kind !== "focus";
+  renderReviewFocus();
   $("review-title").textContent = s.kind === "meeting" ? "Meeting" : "Focus";
   $("review-meta").textContent = `${clock(s.start)} · ${duration(s.elapsed)}`;
   $("review-reflection").value = s.reflection || "";
@@ -852,6 +886,21 @@ function openReview(s) {
   updateSand();
   $("review-overrun").hidden = !!state.active || !extendable(s);
   openDialog($("review-dialog"));
+}
+function renderReviewFocus() {
+  const control = $("focus-control");
+  control.replaceChildren();
+  for (let value = 1; value <= 3; value++) {
+    const choice = button("", "focus-choice", () => {
+      reviewFocus = reviewFocus === value ? 0 : value;
+      renderReviewFocus();
+    }, `${value} ${value === 1 ? "lens" : "lenses"} of focus`);
+    choice.title = `${["Low focus", "Steady focus", "Deep focus"][value - 1]} · click again for zero`;
+    choice.setAttribute("aria-pressed", reviewFocus != null && value <= reviewFocus);
+    choice.append(lens(value));
+    control.append(choice);
+  }
+  control.setAttribute("aria-label", reviewFocus == null ? "Focus not rated" : `Focus ${reviewFocus} out of 3`);
 }
 function addAllocation(a = {}) {
   const row = el("div", "allocation-row");
@@ -937,6 +986,7 @@ $("review-form").onsubmit = async (e) => {
     `sessions/${reviewing.id}/review/`,
     {
       reflection: $("review-reflection").value,
+      focus_score: reviewing.kind === "focus" ? reviewFocus : null,
       allocations: filled.map((r) => ({
         task_id: r.dataset.taskId ? Number(r.dataset.taskId) : null,
         label: r.querySelector("input").value.trim(),

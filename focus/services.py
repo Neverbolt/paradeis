@@ -374,6 +374,7 @@ def serialize_session(session, now):
         "planned": session.planned_seconds,
         "elapsed": session.elapsed_seconds,
         "effort": session.effort,
+        "focus_score": session.focus_score,
         "reviewed": session.reviewed,
         "can_overrun": session.status in ["running", "paused"]
         or (
@@ -498,6 +499,13 @@ def plan(day, prefs, blocks, sessions, now):
             break
     work_end = any(b.kind == "work" and block_bounds(b, prefs)[1] == stop for b in blocks)
     fill_gap(start, stop, count, soft_end=work_end)
+    # Keep breaks between activities, but omit rest after the day's final activity.
+    if result and result[-1]["kind"] == "break":
+        rest_start = datetime.fromisoformat(result[-1]["start"])
+        later_block = any(b.kind != "work" and block_bounds(b, prefs)[1] > rest_start for b in blocks)
+        later_session = any((s.ended_at or s.deadline) > rest_start for s in sessions)
+        if not later_block and not later_session:
+            result.pop()
     return result
 
 

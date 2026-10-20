@@ -300,6 +300,49 @@ class AppTests(TestCase):
         self.assertEqual(self.post(f"/api/sessions/{session.id}/review/", review).status_code, 400)
         self.assertEqual(list(session.allocations.values_list("sand", flat=True)), [3, 1])
 
+    def test_focus_rating_is_per_session_and_preserves_unrated_zero_and_scores(self):
+        session = self.start()
+        self.finish(session)
+        payload = {"allocations": [{"label": "Writing", "sand": 3}, {"label": "Reading", "sand": 1}]}
+        path = f"/api/sessions/{session.id}/review/"
+        self.assertEqual(self.post(path, payload).status_code, 200)
+        session.refresh_from_db()
+        self.assertIsNone(session.focus_score)
+        for score in [1, 2, 3, 0, None]:
+            with self.subTest(score=score):
+                self.assertEqual(self.post(path, {**payload, "focus_score": score}).status_code, 200)
+                snapshot = self.client.get("/api/state/").json()["day"]["sessions"][0]
+                self.assertEqual(snapshot["focus_score"], score)
+                self.assertEqual(snapshot["effort"], 4)
+                self.assertEqual(len(snapshot["allocations"]), 2)
+                self.assertNotIn("focus_score", snapshot["allocations"][0])
+                history = self.client.get("/api/history/?start=2026-10-07&end=2026-10-07").json()
+                self.assertEqual(history["days"][0]["sessions"][0]["focus_score"], score)
+        self.post(path, {**payload, "focus_score": 2})
+        self.post(path, payload)
+        session.refresh_from_db()
+        self.assertEqual(session.focus_score, 2, "Older clients cannot erase a rating by omitting it")
+
+    def test_invalid_focus_rating_does_not_change_the_review(self):
+        session = self.start()
+        self.finish(session)
+        payload = {"allocations": [{"label": "Writing", "sand": 2}], "focus_score": 2}
+        path = f"/api/sessions/{session.id}/review/"
+        self.post(path, payload)
+        for invalid in [-1, 4, True, 1.5, "2", []]:
+            with self.subTest(value=invalid):
+                self.assertEqual(self.post(path, {**payload, "focus_score": invalid}).status_code, 400)
+                session.refresh_from_db()
+                self.assertEqual(session.focus_score, 2)
+                self.assertEqual(list(session.allocations.values_list("sand", flat=True)), [2])
+        session.kind = "meeting"
+        session.focus_score = None
+        session.save()
+        self.assertEqual(self.post(path, payload).status_code, 400)
+        self.assertEqual(self.post(path, {**payload, "focus_score": None}).status_code, 200)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Session.objects.filter(pk=session.pk).update(focus_score=4)
+
     def test_task_completion_stays_with_local_day_and_pending_tasks_carry_forward(self):
         pending = Task.objects.create(user=self.user, title="Tomorrow", position=1)
         late = datetime(2026, 10, 7, 21, 59, tzinfo=timezone.utc)
@@ -501,6 +544,20 @@ class AppTests(TestCase):
             if slot["kind"] == "focus":
                 self.assertEqual(end - start, timedelta(minutes=25))
         self.assertEqual(plan(date(2026, 10, 6), self.prefs, [], [], NOW), [])
+
+    def test_plan_omits_only_the_trailing_break_after_the_last_activity(self):
+        self.prefs.day_end = time(18, 40)
+        at = NOW.replace(hour=16, minute=6)  # 18:06 local
+        slots = plan(date(2026, 10, 7), self.prefs, [], [], at)
+        self.assertEqual([s["kind"] for s in slots], ["focus"])
+        self.assertEqual(datetime.fromisoformat(slots[-1]["end"]), at + timedelta(minutes=25))
+        meeting = self.block(start=time(18, 36), end=time(18, 40))
+        slots = plan(date(2026, 10, 7), self.prefs, [meeting], [], at)
+        self.assertEqual([s["kind"] for s in slots], ["focus", "break"])
+        self.assertEqual(datetime.fromisoformat(slots[-1]["end"]), at + timedelta(minutes=30))
+        regular = plan(date(2026, 10, 7), self.prefs, [], [], NOW)
+        self.assertIn("break", [slot["kind"] for slot in regular[:-1]])
+        self.assertEqual(regular[-1]["kind"], "focus")
 
     def test_block_validation_and_active_session_collision(self):
         data = {
