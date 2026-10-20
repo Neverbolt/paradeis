@@ -96,6 +96,16 @@ function checkWorkWrappingUI(w) {
 
 async function checkSchedulingUI(w) {
   checkWorkWrappingUI(w);
+  const pattern = (id, start, end) => ({id, start, end});
+  const lanes = w.recurrenceLayout([pattern(1, "09:00", "12:00"), pattern(2, "09:00", "10:30"),
+    pattern(3, "10:30", "12:00"), pattern(4, "12:00", "14:00")]);
+  assert(lanes.slice(0, 3).every(item => item.columns === 2));
+  assert.equal(lanes[3].columns, 1, "Adjacent clusters use the full width");
+  const tiny = w.recurrenceLayout([pattern(1, "09:00", "09:05"), pattern(2, "09:05", "09:10")]);
+  assert.equal(tiny[0].columns, 2, "Short cards cannot cover nearby cards");
+  const dates = w.recurrenceMonthDates({frequency: "weekly", weekday: 2, interval_weeks: 4,
+    anchor_date: "2026-09-09", effective_from: "2026-09-09"}, "2026-10-20");
+  assert.deepEqual(Array.from(dates), ["2026-10-07"], "Four-week patterns show this month's actual dates");
   const $ = id => w.document.getElementById(id);
   const note = $("day-note");
   note.value = "Keyboard-saved day note\nSecond line";
@@ -432,7 +442,9 @@ async function checkSchedulingUI(w) {
   submit("block-form");
   await waitFor(() => !$("block-dialog").open, "reserve lunch");
   await click("recurrences-open");
-  await waitFor(() => $("recurrences-dialog").open, "recurring blocks");
+  await waitFor(() => !$("recurring-view").hidden && $("recurrence-list").textContent.includes(`Lunch ${suffix}`), "recurring week view");
+  assert($("day-view").hidden && $("overview").hidden);
+  assert.equal($("recurrence-week").querySelectorAll(".recurrence-day").length, 7);
   assert($("recurrence-list").textContent.includes(`Lunch ${suffix}`));
   assert.equal(w.location.pathname, "/recurring");
   await click("recurrence-add");
@@ -451,9 +463,24 @@ async function checkSchedulingUI(w) {
   );
   $("recurrence-list").querySelector("button").click();
   $("recurrences-dialog").querySelector("[data-close]").click();
-  assert($("recurrences-dialog").open && !$("recurrence-list").hidden);
+  assert(!$("recurrences-dialog").open && !$("recurring-view").hidden);
   assert.equal(w.location.pathname, "/recurring");
-  $("recurrences-dialog").close();
+  assert.equal($("recurrence-list").querySelectorAll(".recurrence-card").length, 8);
+  const schedules = (await w.api("recurrences/")).templates;
+  const lunch = schedules.find(t => t.title === `Lunch ${suffix}`);
+  await w.api("recurrences/", {...lunch, title: "Alternating lunch", anchor_date: w.shiftDay(lunch.anchor_date, 7)});
+  await w.openRecurrences();
+  const overlaps = [...$("recurrence-week").querySelectorAll(`.recurrence-day:nth-child(${lunch.weekday + 2}) .recurrence-card`)]
+    .filter(card => card.textContent.includes("Lunch") || card.textContent.includes("Alternating lunch"));
+  assert.equal(overlaps.length, 2);
+  assert.notEqual(overlaps[0].style.left, overlaps[1].style.left, "Alternating patterns get separate lanes");
+  assert(overlaps.every(card => card.textContent.includes("Every 2 weeks")));
+  for (const card of overlaps) {
+    card.click();
+    assert($("recurrences-dialog").open);
+    $("recurrences-dialog").querySelector("[data-close]").click();
+    assert.equal(w.location.pathname, "/recurring");
+  }
   await click("overview-view");
   await waitFor(
     () => w.document.querySelectorAll(".calendar-day").length > 90,

@@ -890,17 +890,6 @@ dialog::backdrop {
   width: auto;
   font-size: 12px;
 }
-.recurrence-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  padding: 9px 0;
-  font-size: 12px;
-}
-.recurrence-row > button {
-  padding: 5px 9px;
-}
 .account-actions {
   display: flex;
   justify-content: space-between;
@@ -1216,3 +1205,23 @@ dialog::backdrop {
 .calendar-day .work-reservation {padding: 5px; border-radius: 7px;}
 .calendar-day .work-reservation-heading {gap: 2px 5px; padding: 1px 1px 5px; font-size: 10px;}
 .calendar-day .work-reservation-range {font-size: 9px;}
+
+#recurring-view {display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0;}
+#recurring-title {font-size: 19px; margin: 0 0 4px;}
+#recurring-month {margin: 0;}
+.recurring-help {margin: 0 0 12px; max-width: 700px;}
+.recurrence-scroll {overflow: auto; flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 10px; scrollbar-width: thin;}
+.recurrence-week {display: grid; width: 100%; min-width: 100%; padding-bottom: 14px;}
+.recurrence-day {min-width: 0; border-left: 1px solid var(--line);}
+.recurrence-day-heading {position: sticky; top: 0; z-index: 2; height: 38px; margin: 0; padding: 11px 7px; font-size: 11px; font-weight: 600; background: var(--paper, #fafbf7); border-bottom: 1px solid var(--line);}
+.recurrence-ruler .recurrence-day-heading {font-size: 9px; color: var(--muted);}
+.recurrence-day-slots {position: relative; height: var(--schedule-height); background: repeating-linear-gradient(to bottom, transparent 0 59px, var(--line) 59px 60px);}
+.recurrence-hour {position: absolute; right: 5px; font-size: 9px; font-variant-numeric: tabular-nums; color: var(--muted); transform: translateY(2px);}
+.recurrence-card {position: absolute; display: flex; flex-direction: column; gap: 3px; padding: 6px; border: 1px solid #cbd3c2; border-radius: 7px; background: #eaf0e3; text-align: left; font-size: 10px; line-height: 1.25; overflow: auto; overflow-wrap: anywhere;}
+.recurrence-card strong {font-size: 11px;}
+.recurrence-card.work {border: 1px dashed var(--green); background: #f1f4ec;}
+.recurrence-card.break {border-color: #ddd5bc; background: #f6f2e5;}
+.recurrence-card-time {font-variant-numeric: tabular-nums; color: var(--green);}
+.recurrence-card-dates {color: var(--muted);}
+.recurrence-card:hover {filter: brightness(.97);}
+.recurrence-card:focus-visible {outline: 2px solid var(--green); outline-offset: -2px;}

@@ -4,7 +4,8 @@ let state,
   selectedDay = null,
   serverOffset = 0,
   busy = false,
-  overviewVisible = false;
+  overviewVisible = false,
+  recurringVisible = false;
 let reviewing,
   editingBlock,
   templates = [],
@@ -218,6 +219,7 @@ function renderDay() {
   renderStats($("day-summary"), state.day.summary);
   renderTimeline($("timeline"), state.day);
   renderFocusControls();
+  if (recurringVisible && $("recurrence-week").dataset.month !== localDate(now()).slice(0, 7)) renderRecurrenceWeek();
   if (reviewing && $("review-dialog").open)
     $("review-overrun").hidden = !!state.active || !extendable(reviewing);
   renderTasks();
@@ -991,41 +993,113 @@ $("block-form").onsubmit = (e) => {
 };
 $("block-delete").onclick = () =>
   mutate(`blocks/${editingBlock.id}/`, { action: "delete" }, $("block-dialog"));
-async function openRecurrences(id) {
-  try {
-    templates = (await api("recurrences/")).templates;
-    $("recurrence-form").hidden = true;
-    $("recurrence-list").hidden = false;
-    $("recurrence-add").hidden = false;
-    const list = $("recurrence-list");
-    list.replaceChildren();
-    for (const t of templates) {
-      const row = el("div", "recurrence-row");
-      row.append(
-        el(
-          "span",
-          "",
-          `${t.title} · ${t.kind === "work" ? "Work" : t.kind === "meeting" ? "Meeting" : "Break"} · ${t.frequency === "daily" ? "Daily" : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][t.weekday]} ${t.start}${t.frequency === "daily" ? "" : ` · ${t.interval_weeks}w`}`,
-        ),
-        button("Edit", "secondary small", () => editRecurrence(t)),
-      );
-      list.append(row);
-    }
-    if (!templates.length)
-      list.append(el("p", "small muted", "No recurring blocks"));
-    if (id) editRecurrence(templates.find((t) => t.id === id));
-    setRoute("/recurring");
-    openDialog($("recurrences-dialog"));
-  } catch (e) {
-    showError(e);
+function recurrenceMonthDates(template, today) {
+  const first = month(today), last = shiftDay(month(today, 1), -1), dates = [];
+  for (let day = first; day <= last; day = shiftDay(day, 1)) {
+    if (day < (template.effective_from || template.anchor_date)) continue;
+    const weekday = (new Date(`${day}T12:00:00Z`).getUTCDay() + 6) % 7;
+    if (template.frequency === "daily" || (weekday === template.weekday &&
+        Math.floor((Date.parse(`${day}T12:00:00Z`) - Date.parse(`${template.anchor_date}T12:00:00Z`)) / 604800000) % template.interval_weeks === 0))
+      dates.push(day);
   }
+  return dates;
+}
+function recurrenceLayout(items) {
+  const minute = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+  const sorted = items.map(template => ({template, start: minute(template.start),
+    end: Math.max(minute(template.end), minute(template.start) + 90)}))
+    .sort((a, b) => a.start - b.start || a.end - b.end || a.template.id - b.template.id);
+  let cluster = [], lanes = [], stop = -1;
+  const finish = () => cluster.forEach(item => item.columns = lanes.length);
+  for (const item of sorted) {
+    if (item.start >= stop) { finish(); cluster = []; lanes = []; stop = -1; }
+    let lane = lanes.findIndex(end => end <= item.start);
+    if (lane < 0) lane = lanes.length;
+    lanes[lane] = item.end;
+    item.lane = lane;
+    cluster.push(item);
+    stop = Math.max(stop, item.end);
+  }
+  finish();
+  return sorted;
+}
+function renderRecurrenceWeek() {
+  const week = $("recurrence-week"), today = localDate(now());
+  const minutes = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
+  const days = Array.from({length: 7}, (_, weekday) => recurrenceLayout(
+    templates.filter(t => t.frequency === "daily" || t.weekday === weekday)));
+  const start = Math.floor(Math.min(minutes(state.preferences.day_start),
+    ...days.flat().map(item => item.start)) / 60) * 60;
+  const end = Math.ceil(Math.max(minutes(state.preferences.day_end),
+    ...days.flat().map(item => item.end)) / 60) * 60;
+  week.replaceChildren();
+  const widths = days.map(items => Math.max(112, ...items.map(item => item.columns * 120)));
+  week.style.gridTemplateColumns = `44px ${widths.map(width => `minmax(${width}px, 1fr)`).join(" ")}`;
+  week.style.minWidth = `max(100%, ${44 + widths.reduce((sum, width) => sum + width, 0)}px)`;
+  week.style.setProperty("--schedule-height", `${end - start}px`);
+  week.dataset.month = today.slice(0, 7);
+  $("recurring-month").textContent = `${dateLabel(month(today), {month: "long", year: "numeric"})} · ${templates.length} schedules`;
+  $("recurrence-empty").hidden = templates.length > 0;
+  const ruler = el("div", "recurrence-ruler");
+  ruler.append(el("div", "recurrence-day-heading", "Time"));
+  const scale = el("div", "recurrence-day-slots");
+  for (let time = start; time <= Math.min(end, 1440); time += 60) {
+    const label = el("span", "recurrence-hour", `${String(Math.floor(time / 60)).padStart(2, "0")}:00`);
+    label.style.top = `${time - start}px`;
+    scale.append(label);
+  }
+  ruler.append(scale);
+  week.append(ruler);
+  for (const [weekday, name] of ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].entries()) {
+    const day = el("section", "recurrence-day");
+    day.setAttribute("aria-label", name);
+    day.append(el("h2", "recurrence-day-heading", name));
+    const slots = el("div", "recurrence-day-slots");
+    for (const item of days[weekday]) {
+      const t = item.template, dates = recurrenceMonthDates(t, today);
+      const cadence = t.frequency === "daily" ? "Daily" : t.interval_weeks === 1 ? "Weekly" : `Every ${t.interval_weeks} weeks`;
+      const monthDates = !dates.length ? "No dates this month" : t.frequency === "daily" ? "Every day" :
+        `${dateLabel(month(today), {month: "short"})} ${dates.map(date => Number(date.slice(-2))).join(", ")}`;
+      const card = button("", `recurrence-card ${t.kind}`, () => editRecurrence(t),
+        `Edit ${t.title} · ${name} · ${t.start}–${t.end} · ${cadence}`);
+      card.dataset.templateId = t.id;
+      card.style.top = `${item.start - start}px`;
+      card.style.height = `${item.end - item.start - 3}px`;
+      card.style.left = `calc(${item.lane / item.columns * 100}% + 2px)`;
+      card.style.width = `calc(${100 / item.columns}% - 4px)`;
+      card.append(el("span", "recurrence-card-time", `${t.start}–${t.end}`),
+        el("strong", "", t.title), el("span", "", `${t.kind === "work" ? "Work" : t.kind === "meeting" ? "Meeting" : "Break"} · ${cadence}`),
+        el("span", "recurrence-card-dates", monthDates));
+      if (t.timezone && t.timezone !== state.preferences.timezone) card.append(el("span", "", t.timezone));
+      card.title = `${t.title} · ${t.start}–${t.end} · ${cadence} · ${monthDates}${t.timezone ? ` · ${t.timezone}` : ""}`;
+      slots.append(card);
+    }
+    day.append(slots);
+    week.append(day);
+  }
+}
+async function openRecurrences(id) {
+  closeRouteDialogs();
+  setRoute("/recurring");
+  recurringVisible = true;
+  overviewVisible = false;
+  $("day-view").hidden = true;
+  $("overview").hidden = true;
+  $("recurring-view").hidden = false;
+  updateViewButtons("recurrences-open");
+  try {
+    const loaded = (await api("recurrences/")).templates;
+    if (!recurringVisible) return;
+    templates = loaded;
+    renderRecurrenceWeek();
+    if (id) editRecurrence(templates.find(t => t.id === id));
+  } catch (e) { showError(e); }
 }
 function editRecurrence(t) {
   if (!t) return;
   editingTemplate = t;
   $("recurrence-form").hidden = false;
-  $("recurrence-list").hidden = true;
-  $("recurrence-add").hidden = true;
+  openDialog($("recurrences-dialog"));
   $("recurrence-delete").hidden = !t.id;
   for (const [field, key] of [
     ["frequency", "frequency"],
@@ -1085,7 +1159,7 @@ $("recurrence-form").onsubmit = async (e) => {
     $("recurrences-dialog"),
     false,
   );
-  if (saved) await openRecurrences();
+  if (saved) { $("recurrences-dialog").close(); await openRecurrences(); }
 };
 $("recurrence-delete").onclick = async () => {
   const saved = await mutate(
@@ -1094,7 +1168,7 @@ $("recurrence-delete").onclick = async () => {
     $("recurrences-dialog"),
     false,
   );
-  if (saved) await openRecurrences();
+  if (saved) { $("recurrences-dialog").close(); await openRecurrences(); }
 };
 async function loadDayNote() {
   const day = selectedDay,
@@ -1179,21 +1253,23 @@ async function changeDay(day) {
   selectedDay = day;
   await showView(false);
 }
+function updateViewButtons(selected) {
+  for (const id of ["today-view", "overview-view", "recurrences-open"]) {
+    $(id).classList.toggle("selected", id === selected);
+    $(id).setAttribute("aria-pressed", id === selected);
+  }
+}
 async function showView(overview, updateUrl = true) {
   if (updateUrl) {
     closeRouteDialogs();
     setRoute(overview ? "/overview" : "/");
   }
+  recurringVisible = false;
+  $("recurring-view").hidden = true;
   overviewVisible = overview;
   $("day-view").hidden = overview;
   $("overview").hidden = !overview;
-  for (const [id, chosen] of [
-    ["today-view", !overview],
-    ["overview-view", overview],
-  ]) {
-    $(id).classList.toggle("selected", chosen);
-    $(id).setAttribute("aria-pressed", chosen);
-  }
+  updateViewButtons(overview ? "overview-view" : "today-view");
   try {
     if (overview) await loadCalendar({ target: state.today });
     else await refresh();
@@ -1422,21 +1498,10 @@ $("settings-form").onsubmit = (e) => {
     data[field] = Number($(field).value);
   mutate("settings/", data, $("settings-dialog"));
 };
-function returnToRecurrenceList() {
-  if ($("recurrence-form").hidden) return false;
-  $("recurrence-form").hidden = true;
-  $("recurrence-list").hidden = false;
-  $("recurrence-add").hidden = false;
-  return true;
-}
 for (const b of document.querySelectorAll("[data-close]"))
-  b.onclick = () => {
-    const dialog = b.closest("dialog");
-    if (dialog.id === "recurrences-dialog" && returnToRecurrenceList()) return;
-    dialog.close();
-  };
-$("recurrences-dialog").addEventListener("cancel", (e) => {
-  if (returnToRecurrenceList()) e.preventDefault();
+  b.onclick = () => b.closest("dialog").close();
+$("recurrences-dialog").addEventListener("close", () => {
+  $("recurrence-form").hidden = true;
 });
 let routeTransition = false;
 function setRoute(path) {
@@ -1453,7 +1518,7 @@ function closeRouteDialogs() {
   }
   routeTransition = false;
 }
-for (const id of ["settings-dialog", "recurrences-dialog"])
+for (const id of ["settings-dialog"])
   $(id).addEventListener("close", () => {
     if ($(id).dataset.routeClosing) {
       delete $(id).dataset.routeClosing;
@@ -1463,9 +1528,9 @@ for (const id of ["settings-dialog", "recurrences-dialog"])
       !document.querySelector(
         "#settings-dialog[open], #recurrences-dialog[open]",
       ) &&
-      ["/settings", "/recurring"].includes(location.pathname)
+      location.pathname === "/settings"
     )
-      setRoute(overviewVisible ? "/overview" : "/");
+      setRoute(recurringVisible ? "/recurring" : overviewVisible ? "/overview" : "/");
   });
 async function applyRoute() {
   const path = location.pathname;
