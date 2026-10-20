@@ -472,9 +472,27 @@ function timelineCard(item) {
 function renderTimeline(container, day) {
   const previousScroll = container.scrollTop;
   container.replaceChildren();
-  for (const work of day.blocks.filter(b => b.kind === "work"))
-    container.append(button(`${clock(work.start)}–${clock(work.end)} · ${work.title}`,
-      "work-reservation", () => openBlock(work), `Edit Work reservation ${work.title}`));
+  const works = day.blocks.filter(b => b.kind === "work")
+    .sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+  const units = [];
+  const groups = new Map();
+  const workAt = value => works.find(work => Date.parse(work.start) <= value && value < Date.parse(work.end));
+  for (const work of works) {
+    const group = el("section", "work-reservation");
+    group.dataset.workId = work.id;
+    group.setAttribute("aria-label", `Work · ${work.title} · ${clock(work.start)}–${clock(work.end)}`);
+    const heading = button("", "work-reservation-heading", () => openBlock(work),
+      `Edit Work reservation ${work.title}`);
+    heading.append(el("span", "work-reservation-label", "Work"),
+      el("strong", "work-reservation-title", work.title),
+      el("span", "work-reservation-range", `${clock(work.start)}–${clock(work.end)}`));
+    const body = el("div", "work-reservation-items");
+    const end = el("div", "work-reservation-end", clock(work.end));
+    end.setAttribute("aria-label", `End of ${work.title} at ${clock(work.end)}`);
+    group.append(heading, body, end);
+    groups.set(work.id, body);
+    units.push({start: Date.parse(work.start), node: group});
+  }
   const all = entries(day);
   const current =
     day.date === state.today
@@ -487,12 +505,8 @@ function renderTimeline(container, day) {
         ) ||
         all.find((item) => Date.parse(item.start) >= now())
       : null;
+  const rows = new Map();
   for (const item of all) {
-    if (item === current) {
-      const marker = el("div", "now-marker", `Now · ${clock(now())}`);
-      marker.setAttribute("aria-label", `Current time ${clock(now())}`);
-      container.append(marker);
-    }
     if (
       container.id !== "timeline" &&
       item.type === "plan" &&
@@ -514,11 +528,29 @@ function renderTimeline(container, day) {
         ),
       );
     else row.append(timelineCard(item));
-    container.append(row);
+    rows.set(item, row);
+    const work = workAt(Date.parse(item.start));
+    if (work) groups.get(work.id).append(row);
+    else units.push({start: Date.parse(item.start), node: row});
   }
-  if (day.date === state.today && !current)
-    container.append(el("div", "now-marker", `Now · ${clock(now())}`));
-  if (!all.length) container.append(el("p", "timeline-empty", "No sessions"));
+  if (day.date === state.today) {
+    const marker = el("div", "now-marker", `Now · ${clock(now())}`);
+    marker.setAttribute("aria-label", `Current time ${clock(now())}`);
+    const work = workAt(now());
+    const body = work && groups.get(work.id);
+    const currentRow = rows.get(current);
+    if (body) {
+      const next = currentRow?.parentNode === body ? currentRow :
+        [...body.children].find(row => Date.parse(row.dataset.start) >= now());
+      body.insertBefore(marker, next || null);
+    } else if (currentRow && !currentRow.closest(".work-reservation")) {
+      const unit = units.find(unit => unit.node === currentRow);
+      units.splice(units.indexOf(unit), 0, {start: unit.start, node: marker});
+    } else units.push({start: now(), node: marker});
+  }
+  units.sort((a, b) => a.start - b.start);
+  container.append(...units.map(unit => unit.node));
+  if (!all.length && !works.length) container.append(el("p", "timeline-empty", "No sessions"));
   container.scrollTop = previousScroll;
   if (container.id === "timeline" && !overviewVisible && day.date === state.today)
     requestAnimationFrame(() => followCurrentTime(container));

@@ -49,7 +49,54 @@ async function waitFor(check, label) {
   );
 }
 
+function checkWorkWrappingUI(w) {
+  const time = offset => new Date(Date.now() + offset * 60000).toISOString();
+  const entry = (id, title, start, end, extra = {}) => ({id, title,
+    start: time(start), end: time(end), kind: "focus", ...extra});
+  const day = {date: w.eval("state.today"), blocks: [
+    entry(301, "Strategy", -30, 30, {kind: "work"}),
+    entry(302, "Operations", 30, 60, {kind: "work"}),
+    entry(303, "Empty reservation", 90, 120, {kind: "work"}),
+    entry(401, "Call", 5, 15, {kind: "meeting"}),
+  ], sessions: [
+    entry(101, "Before Work", -45, -35, {status: "completed", elapsed: 600, effort: 0}),
+    entry(102, "Another topic", -25, -5, {status: "completed", elapsed: 1200, effort: 0}),
+    entry(103, "After Work", 60, 70, {status: "completed", elapsed: 600, effort: 0}),
+  ], plan: [entry(501, "Break", 15, 20, {kind: "break"}),
+    entry(502, "Operations", 30, 55)]};
+  // Reuse exact boundaries rather than independently rounded timestamps.
+  day.blocks[1].start = day.blocks[0].end;
+  day.plan[1].start = day.blocks[1].start;
+  day.sessions[2].start = day.blocks[1].end;
+  for (const dashboard of [true, false]) {
+    const container = w.document.createElement("div");
+    container.id = dashboard ? "timeline" : "overview-test";
+    w.renderTimeline(container, day);
+    const groups = container.querySelectorAll(".work-reservation");
+    assert.equal(groups.length, 3);
+    assert.equal(groups[0].querySelectorAll(".timeline-row").length, dashboard ? 3 : 2);
+    assert.equal(groups[1].querySelectorAll(".timeline-row").length, 1);
+    assert.equal(groups[2].querySelectorAll(".timeline-row").length, 0);
+    assert.equal(container.querySelectorAll(".timeline-row").length, dashboard ? 6 : 5);
+    const card = title => [...container.querySelectorAll(".timeline-item")]
+      .find(node => node.querySelector("p")?.textContent === title);
+    assert.equal(card("Before Work").closest(".work-reservation"), null);
+    assert.equal(card("After Work").closest(".work-reservation"), null);
+    assert.equal(card("Another topic").closest(".work-reservation"), groups[0]);
+    assert.equal(card("Another topic").className, card("Before Work").className);
+    assert.equal(card("Call").closest(".work-reservation"), groups[0]);
+    assert.equal(card("Operations").closest(".work-reservation"), groups[1]);
+    assert.equal(container.querySelector(".now-marker").closest(".work-reservation"), groups[0]);
+    assert.equal(groups[0].querySelector(".work-reservation-range").textContent,
+      `${w.clock(day.blocks[0].start)}–${w.clock(day.blocks[0].end)}`);
+    assert.equal(groups[0].lastElementChild.textContent, w.clock(day.blocks[0].end));
+    assert.equal(container.firstElementChild, card("Before Work").parentElement);
+    assert.equal(groups[1].nextElementSibling, card("After Work").parentElement);
+  }
+}
+
 async function checkSchedulingUI(w) {
+  checkWorkWrappingUI(w);
   const $ = id => w.document.getElementById(id);
   // Exercise real Work defaults, a newly reserved meeting, and manual breaks.
   await w.api("timer/", {action: "skip_break"});
