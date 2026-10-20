@@ -35,14 +35,72 @@ async function fetchWithCookies(url, options = {}) {
   return response;
 }
 async function waitFor(check, label) {
-  const deadline = Date.now() + 8000;
+  const deadline = Date.now() + 20000;
   while (Date.now() < deadline) {
     if (await check()) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  // A large calendar render can occupy the event loop past the deadline.
+  // Check its final DOM once before reporting a missing result.
+  if (await check()) return;
   throw new Error(
-    `Timed out: ${label}. ${dom?.window.document.getElementById("error")?.textContent || ""}`,
+    `Timed out: ${label}. ${dom?.window.document.getElementById("error")?.textContent || ""} ` +
+    `Calendar days: ${dom?.window.document.querySelectorAll(".calendar-day").length}; JS errors: ${errors.join("; ")}`,
   );
+}
+
+async function checkSchedulingUI(w) {
+  const $ = id => w.document.getElementById(id);
+  // Exercise real Work defaults, a newly reserved meeting, and manual breaks.
+  await w.api("timer/", {action: "skip_break"});
+  await w.api("timer/", {action: "configure_auto", auto_focus: false, auto_break: true});
+  await w.refresh();
+  const workStart = Math.floor(Date.parse((await w.api("state/")).now) / 60000) * 60000;
+  const workEnd = workStart + 60 * 60000;
+  if (w.localDate(workStart) === w.localDate(workEnd)) {
+    await w.api("blocks/", {kind: "work", title: "Strategy", date: w.localDate(workStart),
+      start: w.clock(workStart), end: w.clock(workEnd)});
+    await w.refresh();
+    assert.equal($("timer-task").textContent, "Strategy");
+    assert($("timeline").querySelector(".work-reservation"));
+    assert(!$("timeline").querySelector(".reserved.work"));
+    assert(w.document.querySelector('#block-kind option[value="work"]'));
+    assert(w.document.querySelector('#repeat-kind option[value="work"]'));
+    $("auto-break").checked = false;
+    $("auto-break").dispatchEvent(new w.Event("change"));
+    await waitFor(() => w.eval("!busy && !state.preferences.auto_break"), "manual-break preference");
+    $("timer-main").click();
+    await waitFor(() => $("timer-main").textContent === "Pause" && w.eval("!busy"), "start Work focus");
+    const beforeMeeting = (await w.api("state/")).active;
+    assert.equal(beforeMeeting.title, "Strategy");
+    assert.equal(beforeMeeting.kind, "focus");
+    const meetingStart = workStart + 10 * 60000;
+    const meetingEnd = meetingStart + 10 * 60000;
+    await w.api("blocks/", {kind: "meeting", title: "Strategy call", date: w.localDate(meetingStart),
+      start: w.clock(meetingStart), end: w.clock(meetingEnd)});
+    await w.refresh();
+    assert(Date.parse((await w.api("state/")).active.end) < Date.parse(beforeMeeting.end));
+    $("timer-finish").click();
+    await waitFor(() => $("review-dialog").open && w.eval("!busy"), "finish shortened Work focus");
+    $("review-dialog").close();
+    assert.equal($("timer-main").textContent, "Start break");
+    $("timer-main").click();
+    await waitFor(() => $("timer-main").textContent === "Skip break" && w.eval("!busy"), "start manual break");
+    $("auto-focus").checked = true;
+    $("auto-focus").dispatchEvent(new w.Event("change"));
+    await waitFor(() => w.eval("!busy && state.preferences.auto_focus"), "quick auto-focus toggle");
+    assert.equal((await w.api("state/")).preferences.auto_focus, true);
+    $("timer-main").click();
+    await waitFor(() => w.eval("!busy && !!state.active"), "automatically start focus after skipping the break");
+    assert.equal((await w.api("state/")).active.title, "Strategy");
+    $("timer-cancel").click();
+    await waitFor(() => w.eval("!busy && !state.active"), "discard stops the automatic cycle");
+    assert.equal((await w.api("state/")).can_auto_start, false);
+    $("auto-focus").checked = false;
+    $("auto-focus").dispatchEvent(new w.Event("change"));
+    await waitFor(() => w.eval("!busy && !state.preferences.auto_focus"), "stop automatic cycle");
+    await w.loadDayNote();
+  }
 }
 
 (async () => {
@@ -73,11 +131,11 @@ async function waitFor(check, label) {
           boundaryStart = JSON.parse(options.body);
           return {ok: true, status: 200, json: async () => ({ok: true})};
         }
-        let response = await fetchWithCookies(url, options);
         if (overrideState && String(url).includes("/api/state/")) {
           const snapshot = overrideState();
-          response = { ok: true, status: 200, json: async () => snapshot };
+          return { ok: true, status: 200, json: async () => snapshot };
         }
+        let response = await fetchWithCookies(url, options);
         if (overrideToday && String(url).includes("/api/state/")) {
           const data = await response.json();
           data.today = overrideToday;
@@ -127,6 +185,12 @@ async function waitFor(check, label) {
   const change = (id) =>
     $(id).dispatchEvent(new w.Event("input", { bubbles: true }));
   await waitFor(() => $("timeline").children.length > 0, "initial state");
+  if (process.env.PARADEIS_SCHEDULING_ONLY === "1") {
+    await checkSchedulingUI(w);
+    assert.deepEqual(errors, [], "No JavaScript errors");
+    console.log("PASS: flexible Work defaults, shortening a running pomo, manual breaks, auto focus, and discard stopping the cycle.");
+    return;
+  }
   const suffix = Date.now();
   for (const name of [`Write a proposal ${suffix}`, `Review notes ${suffix}`]) {
     $("task-title").value = name;
@@ -400,7 +464,7 @@ async function waitFor(check, label) {
   // even before the ordinary 15-second state poll.
   const realState = await w.api("state/");
   const upcomingMeeting = {id: 987654, kind: "meeting", title: "Boundary meeting",
-    start: new Date(Date.now() + 1200).toISOString(),
+    start: new Date(Date.now() + 3000).toISOString(),
     end: new Date(Date.now() + 300000).toISOString(), tracked: false};
   overrideState = () => ({...realState, now: new Date().toISOString(),
     active: null, break_until: null, live_block: null, next_block: upcomingMeeting});
@@ -420,6 +484,7 @@ async function waitFor(check, label) {
   await waitFor(() => !$("timer-main").disabled, "timer ready after meeting boundary check");
   await w.loadDayNote();
   await waitFor(() => w.eval("!busy"), "mutations settled before closing the test page");
+  await checkSchedulingUI(w);
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
     "PASS: login, tasks, timer, pause/resume, freeform sand review, overrun, notification, recurring blocks, bounded calendar, and day/week/month notes.",

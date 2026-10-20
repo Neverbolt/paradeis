@@ -342,6 +342,64 @@ fs.mkdirSync("test-results", { recursive: true });
         path: `test-results/week-${viewport.width}.png`,
       });
     }
+    await page.setViewportSize({width: 1280, height: 800});
+    await page.locator("#today-view").click();
+    await page.locator("#go-today").click();
+    const workWindow = await page.evaluate(async () => {
+      await api("timer/", {action: "skip_break"});
+      const snapshot = await api("state/");
+      const start = Math.floor(Date.parse(snapshot.now) / 60000) * 60000;
+      const end = start + 3600000;
+      return localDate(start) === localDate(end) ? {date: localDate(start),
+        start: clock(start), end: clock(end), meetingStart: clock(start + 600000),
+        meetingEnd: clock(start + 1200000)} : null;
+    });
+    if (workWindow) {
+      await page.locator("#block-open").click();
+      await page.locator("#block-kind").selectOption("work");
+      await page.locator("#block-name").fill("Strategy");
+      await page.locator("#block-date").fill(workWindow.date);
+      await page.locator("#block-start").fill(workWindow.start);
+      await page.locator("#block-end").fill(workWindow.end);
+      await page.locator('#block-form button[type="submit"]').click();
+      await page.waitForSelector("#block-dialog[open]", {state: "hidden"});
+      await waitFor(() => !busy);
+      assert.equal(await page.locator("#timer-task").textContent(), "Strategy");
+      assert.equal(await page.locator("#timeline .reserved.work").count(), 0);
+      assert(await page.locator("#timeline .work-reservation").count());
+      await page.locator("#auto-break").uncheck();
+      await waitFor(() => !busy && !state.preferences.auto_break);
+      await page.locator("#timer-main").click();
+      await waitFor(() => !busy && state.active?.title === "Strategy");
+      await page.locator("#timer-topic").selectOption("open");
+      await waitFor(() => !busy && state.active?.title === "Open focus");
+      await page.locator("#timer-topic").selectOption("");
+      await waitFor(() => !busy && state.active?.title === "Strategy");
+      const originalEnd = await page.evaluate(() => state.active.end);
+      await page.evaluate(async data => {
+        await api("blocks/", {kind: "meeting", title: "Strategy call", date: data.date,
+          start: data.meetingStart, end: data.meetingEnd});
+        await refresh();
+      }, workWindow);
+      assert(await page.evaluate(end => Date.parse(state.active.end) < Date.parse(end), originalEnd));
+      await page.locator("#timer-finish").click();
+      await page.waitForSelector("#review-dialog[open]");
+      await waitFor(() => !busy);
+      await page.getByRole("button", {name: "Close review", exact: true}).click();
+      assert.equal(await page.locator("#timer-main").textContent(), "Start break");
+      await page.locator("#timer-main").click();
+      await waitFor(() => !busy && document.querySelector("#timer-main").textContent === "Skip break");
+      await page.locator("#auto-focus").check();
+      await waitFor(() => !busy && state.preferences.auto_focus);
+      await page.locator("#timer-main").click();
+      await waitFor(() => !busy && !!state.active);
+      assert.equal(await page.locator("#timer-task").textContent(), "Strategy");
+      await page.locator("#timer-cancel").click();
+      await waitFor(() => !busy && !state.active && !state.can_auto_start);
+      await page.locator("#auto-focus").uncheck();
+      await waitFor(() => !busy && !state.preferences.auto_focus);
+      await page.screenshot({path: "test-results/work-scheduling.png"});
+    }
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

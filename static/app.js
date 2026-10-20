@@ -19,6 +19,7 @@ let calendarAnchor,
 const taskDrafts = new Map();
 const noteReads = new Map();
 let completionTitle = "";
+let nextTopicChoice = "", autoStarting = false, autoRetryAt = 0;
 function titleMode() {
   return localStorage.getItem("tab-title-mode") === "completion" ? "completion" : "countdown";
 }
@@ -150,6 +151,7 @@ function toast(message) {
 async function mutate(path, data, dialog, close = true) {
   if (busy) return false;
   busy = true;
+  tick();
   try {
     await api(path, data);
     if (dialog && close) dialog.close();
@@ -214,6 +216,9 @@ function renderDay() {
   });
   renderStats($("day-summary"), state.day.summary);
   renderTimeline($("timeline"), state.day);
+  renderFocusControls();
+  if (reviewing && $("review-dialog").open)
+    $("review-overrun").hidden = !!state.active || !extendable(reviewing);
   renderTasks();
   const pending = state.pending[0];
   $("review-prompt").hidden = !pending;
@@ -410,9 +415,9 @@ function entries(day) {
   return [
     ...day.sessions.map((s) => ({ ...s, type: "session" })),
     ...day.blocks
-      .filter((b) => !tracked.has(b.id))
+      .filter((b) => b.kind !== "work" && !tracked.has(b.id))
       .map((b) => ({ ...b, type: "block" })),
-    ...day.plan.map((p) => ({ ...p, type: "plan", title: "Focus" })),
+    ...day.plan.map((p) => ({ ...p, type: "plan", title: p.title || "Focus" })),
   ].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
 function timelineCard(item) {
@@ -467,6 +472,9 @@ function timelineCard(item) {
 function renderTimeline(container, day) {
   const previousScroll = container.scrollTop;
   container.replaceChildren();
+  for (const work of day.blocks.filter(b => b.kind === "work"))
+    container.append(button(`${clock(work.start)}–${clock(work.end)} · ${work.title}`,
+      "work-reservation", () => openBlock(work), `Edit Work reservation ${work.title}`));
   const all = entries(day);
   const current =
     day.date === state.today
@@ -570,6 +578,29 @@ function extendable(s) {
         state.last_completed?.id === s.id))
   );
 }
+function renderFocusControls() {
+  const select = $("timer-topic");
+  const choice = state.active?.kind === "focus" ? state.active.topic_choice || "" : nextTopicChoice;
+  select.replaceChildren();
+  const add = (value, label) => {const option = el("option", "", label); option.value = value; select.append(option);};
+  add("", `Default · ${state.active?.topic_default || state.default_topic || "Open focus"}`);
+  for (const task of state.tasks.filter(t => !t.done)) add(String(task.id), task.title);
+  add("open", "Open focus");
+  select.value = choice;
+  if (select.selectedIndex < 0) {select.value = ""; nextTopicChoice = "";}
+  $("auto-focus").checked = !!state.preferences.auto_focus;
+  $("auto-break").checked = !!state.preferences.auto_break;
+}
+$("timer-topic").onchange = () => {
+  if (state.active?.kind === "focus") timerAction("set_topic", {topic: $("timer-topic").value});
+  else nextTopicChoice = $("timer-topic").value;
+};
+for (const id of ["auto-focus", "auto-break"]) $(id).onchange = () => {
+  autoRetryAt = 0;
+  mutate("timer/", {action: "configure_auto", auto_focus: $("auto-focus").checked,
+    auto_break: $("auto-break").checked});
+};
+$("timer-skip-break").onclick = () => timerAction("skip_break");
 function currentBlock() {
   return [state.live_block, state.next_block].find(block => block &&
     Date.parse(block.start) <= now() && now() < Date.parse(block.end)) || null;
@@ -586,6 +617,12 @@ function tick() {
   });
   const a = state.active, block = currentBlock();
   const resting = !a && !block && Date.parse(state.break_until) > now();
+  const waitingBreak = !a && !block && !resting ? state.pending_break : null;
+  $("timer-topic").hidden = !!block || resting || !!waitingBreak || a?.kind === "meeting";
+  $("timer-topic").disabled = busy;
+  for (const id of ["auto-focus", "auto-break"]) $(id).disabled = busy;
+  $("timer-skip-break").hidden = !waitingBreak;
+  $("timer-skip-break").disabled = busy;
   let seconds, mode, task, label;
   if (a) {
     seconds = remaining(a);
@@ -612,13 +649,19 @@ function tick() {
     mode = "Break";
     task = "";
     label = "Skip break";
+  } else if (waitingBreak) {
+    seconds = waitingBreak.pending_break_seconds;
+    mode = "Break";
+    task = "Ready when you are";
+    label = "Start break";
   } else {
     seconds = nextSeconds();
     mode = "Focus";
-    task = state.tasks.find((t) => !t.done)?.title || "";
+    task = nextTopicChoice === "open" ? "Open focus" :
+      state.tasks.find(t => String(t.id) === nextTopicChoice)?.title || state.default_topic || "";
     label = "Start";
   }
-  const waiting = !a && !block && !resting && seconds < 1 &&
+  const waiting = !a && !block && !resting && !waitingBreak && seconds < 1 &&
     state.next_block && Date.parse(state.next_block.start) > now();
   if (waiting) {
     seconds = (Date.parse(state.next_block.start) - now()) / 1000;
@@ -640,7 +683,7 @@ function tick() {
     busy || waiting ||
     (!a && block && (block.kind === "break" || block.tracked)) ||
     (!a && !block && !resting && seconds < 1);
-  $("timer-time").disabled = !!block && !a;
+  $("timer-time").disabled = (!!block && !a) || !!waitingBreak || resting;
   $("timer-cycle").textContent =
     `${state.day.sessions.filter((s) => s.status === "completed").length} completed`;
   for (const id of ["timer-finish", "timer-cancel", "timer-overrun"])
@@ -653,7 +696,7 @@ function tick() {
   $("timer-ignore-break").hidden =
     !!a ||
     !!block ||
-    resting ||
+    resting || !!waitingBreak ||
     !state.next_block ||
     nextSeconds(true) <= nextSeconds();
   $("timer-ignore-break").disabled = busy || nextSeconds(true) < 1;
@@ -677,6 +720,13 @@ function tick() {
       refresh().catch(showError);
     }
   }
+  const automaticBreak = waitingBreak && state.preferences.auto_break;
+  if (!busy && !autoStarting && now() >= autoRetryAt && (automaticBreak || state.can_auto_start)) {
+    autoStarting = true;
+    mutate("timer/", {action: automaticBreak ? "auto_break" : "auto_start"})
+      .then(ok => {if (!ok) autoRetryAt = now() + 15000;})
+      .finally(() => {autoStarting = false;});
+  }
 }
 async function timerAction(action, extra = {}) {
   await mutate("timer/", {
@@ -699,14 +749,17 @@ $("timer-main").onclick = () => {
     askNotificationPermission();
     timerAction("start", { block_id: b.id });
   } else if (Date.parse(state.break_until) > now()) timerAction("skip_break");
+  else if (state.pending_break) timerAction("start_break");
   else {
     askNotificationPermission();
-    timerAction("start");
+    timerAction("start", {topic: nextTopicChoice});
+    nextTopicChoice = "";
   }
 };
 $("timer-ignore-break").onclick = () => {
   askNotificationPermission();
-  timerAction("start", { ignore_break: true });
+  timerAction("start", { ignore_break: true, topic: nextTopicChoice });
+  nextTopicChoice = "";
 };
 $("timer-finish").onclick = () => timerAction("finish");
 $("timer-cancel").onclick = () => timerAction("cancel");
@@ -921,7 +974,7 @@ async function openRecurrences(id) {
         el(
           "span",
           "",
-          `${t.title} · ${t.frequency === "daily" ? "Daily" : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][t.weekday]} ${t.start}${t.frequency === "daily" ? "" : ` · ${t.interval_weeks}w`}`,
+          `${t.title} · ${t.kind === "work" ? "Work" : t.kind === "meeting" ? "Meeting" : "Break"} · ${t.frequency === "daily" ? "Daily" : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][t.weekday]} ${t.start}${t.frequency === "daily" ? "" : ` · ${t.interval_weeks}w`}`,
         ),
         button("Edit", "secondary small", () => editRecurrence(t)),
       );

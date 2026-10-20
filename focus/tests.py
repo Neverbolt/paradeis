@@ -234,8 +234,10 @@ class AppTests(TestCase):
             self.post(
                 "/api/timer/", {"action": "resume", "id": session.id}, NOW + timedelta(minutes=30)
             ).status_code,
-            409,
+            200,
         )
+        session.refresh_from_db()
+        self.assertEqual(session.remaining_seconds, 5 * 60)
 
     def test_meeting_handoff_when_short_break_uses_remaining_focus_time(self):
         block = self.block(start=time(9, 2), end=time(9, 30))
@@ -514,7 +516,8 @@ class AppTests(TestCase):
         self.assertEqual(self.post("/api/blocks/", data).status_code, 400)
         self.start()
         data.update(start="09:10", end="09:30")
-        self.assertEqual(self.post("/api/blocks/", data).status_code, 409)
+        self.assertEqual(self.post("/api/blocks/", data).status_code, 200)
+        self.assertEqual(Session.objects.filter(status="running").get().planned_seconds, 5 * 60)
 
     def test_dst_nonexistent_and_ambiguous_times_are_rejected(self):
         for day in [date(2026, 3, 29), date(2026, 10, 25)]:
@@ -1043,7 +1046,7 @@ class EffortMigrationTests(TransactionTestCase):
         from django.db.migrations.executor import MigrationExecutor
 
         old = [("focus", "0002_alter_preferences_day_end_and_more")]
-        new = [("focus", "0003_blocktemplate_and_more")]
+        new = MigrationExecutor(connection).loader.graph.leaf_nodes()
         executor = MigrationExecutor(connection)
         executor.migrate(old)
         try:

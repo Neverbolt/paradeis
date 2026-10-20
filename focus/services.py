@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from .models import Allocation, Block, Preferences, Session, TaskFocusSpan
+from .models import Allocation, Block, Preferences, Session, Task, TaskFocusSpan
 
 
 class Conflict(ValueError):
@@ -57,20 +57,60 @@ def block_bounds(block, prefs):
     return instant(block.date, block.start, zone), instant(block.date, block.end, zone)
 
 
+def work_at(user, prefs, now):
+    for block in Block.objects.filter(user=user, kind="work", deleted=False,
+                                     date=calendar_day(prefs, now)):
+        start, end = block_bounds(block, prefs)
+        if start <= now < end:
+            return block
+    return None
+
+
+def session_topic(session):
+    if session.topic_mode == "work":
+        return None, session.work_topic
+    if session.topic_mode == "open":
+        return None, "Open focus"
+    if session.topic_mode == "task" and session.selected_task_id:
+        task = session.selected_task
+        if not task.done and not task.archived:
+            return task, task.title
+    task = session.user.task_set.filter(done=False, archived=False).first()
+    return task, task.title if task else "Open focus"
+
+
+def choose_topic(session, prefs, now, topic=None):
+    session.selected_task = None
+    session.work_topic = ""
+    if topic == "open":
+        session.topic_mode = "open"
+    elif topic not in [None, ""]:
+        if not isinstance(topic, str) or not topic.isdecimal():
+            raise ValueError("Choose a valid focus topic.")
+        if not 1 <= int(topic) <= 2**53 - 1:
+            raise ValueError("Choose a valid focus topic.")
+        session.selected_task = Task.objects.get(user=session.user, id=int(topic),
+                                                done=False, archived=False)
+        session.topic_mode = "task"
+    else:
+        work = work_at(session.user, prefs, now)
+        session.topic_mode = "work" if work else "queue"
+        session.work_topic = work.title if work else ""
+    session.title = session_topic(session)[1]
+
+
 def track_top_task(session, now):
-    """Close/open a durable task interval at queue and timer transitions."""
+    """Record the chosen topic, or the changing queue, during active focus time."""
     if not session or session.kind != "focus":
         return
     span = session.task_spans.filter(ended_at__isnull=True).first()
-    task = (session.user.task_set.filter(done=False, archived=False).first()
-            if session.status == "running" else None)
-    if span and (not task or span.task_id != task.id):
-        span.ended_at = max(span.started_at, min(now, session.deadline))
-        span.save(update_fields=["ended_at"])
+    task, label = session_topic(session)
+    if span and (session.status != "running" or span.task_id != (task.id if task else None)
+                 or (not task and span.label != label)):
+        close_task_span(session, now)
         span = None
-    if task and span is None:
-        TaskFocusSpan.objects.create(session=session, task=task, label=task.title,
-                                     started_at=now)
+    if session.status == "running" and span is None:
+        TaskFocusSpan.objects.create(session=session, task=task, label=label, started_at=now)
 
 
 def close_task_span(session, now):
@@ -119,7 +159,12 @@ def complete(session, prefs, now):
         Session.objects.filter(user=session.user, date=session.date, status="completed").count() + 1
     )
     minutes = prefs.long_break if count % prefs.long_every == 0 else prefs.short_break
-    session.break_until = end + timedelta(minutes=minutes)
+    session.pending_break_seconds = 0 if prefs.auto_break else minutes * 60
+    session.break_until = end + timedelta(minutes=minutes) if prefs.auto_break else None
+    if session.break_until:
+        _, reserved = next_focus(session.user, prefs, end, True)
+        if reserved:
+            session.break_until = min(session.break_until, max(end, block_bounds(reserved, prefs)[0]))
     session.save()
     return session
 
@@ -132,10 +177,12 @@ def settle(user, prefs, now):
     return current
 
 
-def check_room(user, prefs, start, end, ignore_block=None):
+def check_room(user, prefs, start, end, ignore_block=None, kind=None):
     first, last = calendar_day(prefs, start), calendar_day(prefs, end)
     for block in Block.objects.filter(user=user, date__range=(first, last), deleted=False):
         if block.id == ignore_block:
+            continue
+        if (kind == "work") != (block.kind == "work"):
             continue
         bs, be = block_bounds(block, prefs)
         if start < be and end > bs:
@@ -151,7 +198,7 @@ def next_focus(user, prefs, now, ignore_break=False):
         user=user,
         deleted=False,
         date__range=(calendar_day(prefs, now), calendar_day(prefs, now) + timedelta(days=1)),
-    ):
+    ).exclude(kind="work"):
         start, end = block_bounds(block, prefs)
         if start <= now < end:
             return 0, block
@@ -165,7 +212,7 @@ def next_focus(user, prefs, now, ignore_break=False):
     return requested, upcoming
 
 
-def start_session(user, prefs, now, block_id=None, ignore_break=False):
+def start_session(user, prefs, now, block_id=None, ignore_break=False, topic=None, auto=False):
     if Session.objects.filter(user=user, status__in=["running", "paused"]).exists():
         raise Conflict("A timer is already active. Refresh to see it.")
     task = user.task_set.filter(done=False, archived=False).first()
@@ -181,6 +228,8 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False):
             raise Conflict("This meeting has already been tracked.")
         seconds = math.ceil((end - now).total_seconds())
         kind, title, task = "meeting", block.title, None
+    if auto:
+        seconds = min(seconds, max(0, int((auto_window_end(user, prefs, now) - now).total_seconds())))
     if seconds < 1:
         raise Conflict("No focus time available before the reserved block.")
     end = now + timedelta(seconds=seconds)
@@ -188,6 +237,7 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False):
         end = block_bounds(block, prefs)[1]
     check_room(user, prefs, now, end, block.id if block else None)
     Session.objects.filter(user=user, break_until__gt=now).update(break_until=now)
+    Session.objects.filter(user=user, pending_break_seconds__gt=0).update(pending_break_seconds=0)
     session = Session.objects.create(
         user=user,
         date=local_day(prefs, now),
@@ -200,10 +250,15 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False):
         remaining_seconds=seconds,
         planned_seconds=seconds,
     )
+    if kind == "focus":
+        choose_topic(session, prefs, now, topic)
+        session.save(update_fields=["title", "topic_mode", "work_topic", "selected_task"])
+        task, title = session_topic(session)
     Allocation.objects.create(session=session, task=task, label=title, automatic=kind == "focus")
     track_top_task(session, now)
     prefs.next_focus_seconds = None
-    prefs.save(update_fields=["next_focus_seconds"])
+    prefs.auto_armed = prefs.auto_focus
+    prefs.save(update_fields=["next_focus_seconds", "auto_armed"])
     return session
 
 
@@ -327,6 +382,10 @@ def serialize_session(session, now):
             and now - session.ended_at <= timedelta(hours=1)
         ),
         "reflection": session.reflection,
+        "pending_break_seconds": session.pending_break_seconds,
+        "topic_choice": (str(session.selected_task_id) if session.topic_mode == "task"
+                         and session.selected_task_id else "open" if session.topic_mode == "open" else ""),
+        "topic_default": session.work_topic if session.topic_mode == "work" else "",
         "allocations": [
             {"task_id": a.task_id, "label": a.label, "sand": a.sand}
             for a in session.allocations.all()
@@ -365,9 +424,17 @@ def plan(day, prefs, blocks, sessions, now):
     if day < local_day(prefs, now):
         return []
     schedule_day = day + timedelta(days=int(prefs.day_start < prefs.day_rollover))
-    start = max(instant(schedule_day, prefs.day_start, prefs), now)
-    stop = instant(schedule_day, prefs.day_end, prefs)
-    occupied = [block_bounds(b, prefs) for b in blocks]
+    windows = [(instant(schedule_day, prefs.day_start, prefs), instant(schedule_day, prefs.day_end, prefs))]
+    windows.extend(block_bounds(b, prefs) for b in blocks if b.kind == "work")
+    merged = []
+    for first, last in sorted(windows):
+        if merged and first <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(last, merged[-1][1]))
+        else:
+            merged.append((first, last))
+    start, stop = max(merged[0][0], now), merged[-1][1]
+    excluded_gaps = [(left[1], right[0]) for left, right in zip(merged, merged[1:])]
+    occupied = [block_bounds(b, prefs) for b in blocks if b.kind != "work"] + excluded_gaps
     count = sum(s.status == "completed" for s in sessions)
     for session in sessions:
         end = session.ended_at or (
@@ -384,7 +451,7 @@ def plan(day, prefs, blocks, sessions, now):
     result = []
     first_duration = prefs.next_focus_seconds if day == local_day(prefs, now) else None
 
-    def fill_gap(cursor, limit, count, reserved=False):
+    def fill_gap(cursor, limit, count, reserved=False, soft_end=False):
         nonlocal first_duration
         while cursor < limit:
             seconds = min(
@@ -394,13 +461,15 @@ def plan(day, prefs, blocks, sessions, now):
             if seconds < 60:
                 break
             slot_duration = timedelta(seconds=seconds)
-            if not reserved and slot_duration < timedelta(
+            if not reserved and not soft_end and slot_duration < timedelta(
                 seconds=first_duration or prefs.focus_minutes * 60
             ):
                 break
             result.append(
                 {
                     "kind": "focus",
+                    "title": next((b.title for b in blocks if b.kind == "work"
+                                   and block_bounds(b, prefs)[0] <= cursor < block_bounds(b, prefs)[1]), "Focus"),
                     "start": cursor.isoformat(),
                     "end": (cursor + slot_duration).isoformat(),
                 }
@@ -422,9 +491,77 @@ def plan(day, prefs, blocks, sessions, now):
     for busy_start, busy_end in occupied:
         if busy_end <= start:
             continue
-        count = fill_gap(start, min(busy_start, stop), count, reserved=True)
+        soft_end = (busy_start, busy_end) in excluded_gaps
+        count = fill_gap(start, min(busy_start, stop), count, reserved=not soft_end, soft_end=soft_end)
         start = max(start, busy_end)
         if start >= stop:
             break
-    fill_gap(start, stop, count)
+    work_end = any(b.kind == "work" and block_bounds(b, prefs)[1] == stop for b in blocks)
+    fill_gap(start, stop, count, soft_end=work_end)
     return result
+
+
+def fit_focus_before(session, prefs, now, start):
+    """Preserve worked time while making room for a newly reserved fixed block."""
+    if not session or session.kind != "focus" or start < now:
+        return
+    worked = (max(0, int((now - session.resumed_at).total_seconds()))
+              if session.status == "running" else 0)
+    remaining = max(0, session.remaining_seconds - worked)
+    available = max(0, int((start - now).total_seconds()) - prefs.short_break * 60)
+    if remaining <= available:
+        return
+    if session.status == "running":
+        session.elapsed_seconds += worked
+        session.resumed_at = now
+    session.remaining_seconds = available
+    session.planned_seconds = session.elapsed_seconds + available
+    session.deadline = now + timedelta(seconds=available)
+    if available == 0:
+        complete(session, prefs, now)
+        if session.break_until:
+            session.break_until = min(session.break_until, start)
+    session.save()
+
+
+def pending_break(user, prefs, now):
+    latest = Session.objects.filter(user=user).order_by("-started_at", "-id").first()
+    return latest if (latest and latest.status == "completed" and
+                      latest.date == local_day(prefs, now) and latest.pending_break_seconds) else None
+
+
+def start_break(user, prefs, now):
+    session = pending_break(user, prefs, now)
+    if not session or Session.objects.filter(user=user, status__in=["running", "paused"]).exists():
+        raise Conflict("There is no break waiting to start.")
+    _, upcoming = next_focus(user, prefs, now, True)
+    seconds = session.pending_break_seconds
+    if upcoming:
+        seconds = min(seconds, max(0, int((block_bounds(upcoming, prefs)[0] - now).total_seconds())))
+    if seconds < 1:
+        raise Conflict("A reserved block is in progress.")
+    session.break_until = now + timedelta(seconds=seconds)
+    session.pending_break_seconds = 0
+    session.save(update_fields=["break_until", "pending_break_seconds"])
+
+
+def auto_window_end(user, prefs, now):
+    day = calendar_day(prefs, now)
+    start, end = instant(day, prefs.day_start, prefs), instant(day, prefs.day_end, prefs)
+    if start <= now < end:
+        return end
+    work = work_at(user, prefs, now)
+    return block_bounds(work, prefs)[1] if work else now
+
+
+def can_auto_start(user, prefs, now, active=None):
+    if active or not prefs.auto_focus or not prefs.auto_armed:
+        return False
+    latest = Session.objects.filter(user=user).order_by("-started_at", "-id").first()
+    if not latest or latest.status != "completed" or latest.date != local_day(prefs, now):
+        return False
+    if latest.pending_break_seconds or (latest.break_until and latest.break_until > now):
+        return False
+    if auto_window_end(user, prefs, now) < now + timedelta(seconds=60):
+        return False
+    return next_focus(user, prefs, now)[0] >= 60
