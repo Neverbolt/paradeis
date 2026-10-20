@@ -97,6 +97,18 @@ function checkWorkWrappingUI(w) {
 async function checkSchedulingUI(w) {
   checkWorkWrappingUI(w);
   const $ = id => w.document.getElementById(id);
+  const note = $("day-note");
+  note.value = "Keyboard-saved day note\nSecond line";
+  note.dispatchEvent(new w.Event("input", {bubbles: true}));
+  for (const modifiers of [{}, {ctrlKey: true, isComposing: true}, {ctrlKey: true, repeat: true}]) {
+    const event = new w.KeyboardEvent("keydown", {key: "Enter", bubbles: true, cancelable: true, ...modifiers});
+    note.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+    assert.equal($("day-note-status").textContent, "Unsaved");
+  }
+  note.dispatchEvent(new w.KeyboardEvent("keydown", {key: "Enter", ctrlKey: true, bubbles: true, cancelable: true}));
+  await waitFor(() => $("day-note-status").textContent === "Saved", "Ctrl+Enter saves the day note");
+  assert.equal((await w.api(`notes/?period=day&date=${w.eval("selectedDay")}`)).text, note.value);
   // Exercise real Work defaults, a newly reserved meeting, and manual breaks.
   await w.api("timer/", {action: "skip_break"});
   await w.api("timer/", {action: "configure_auto", auto_focus: false, auto_break: true});
@@ -367,7 +379,9 @@ async function checkSchedulingUI(w) {
     "Five-sand budget enforced",
   );
   $("review-reflection").value = "Progress";
-  submit("review-form");
+  $("review-reflection").dispatchEvent(new w.KeyboardEvent("keydown", {
+    key: "Enter", ctrlKey: true, bubbles: true, cancelable: true,
+  }));
   await waitFor(() => !$("review-dialog").open, "save review");
   await waitFor(
     () =>
@@ -465,11 +479,9 @@ async function checkSchedulingUI(w) {
     const textarea = group.querySelector("textarea");
     textarea.value = `${text} reflection ${suffix}`;
     textarea.dispatchEvent(new w.Event("input", { bubbles: true }));
-    group
-      .querySelector("form")
-      .dispatchEvent(
-        new w.Event("submit", { bubbles: true, cancelable: true }),
-      );
+    textarea.dispatchEvent(new w.KeyboardEvent("keydown", {
+      key: "Enter", ctrlKey: true, bubbles: true, cancelable: true,
+    }));
     await waitFor(
       () => group.querySelector(".note-actions").textContent.includes("Saved"),
       `save ${period} note`,

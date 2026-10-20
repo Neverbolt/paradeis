@@ -1130,6 +1130,14 @@ $("day-note-form").onsubmit = (e) => {
   e.preventDefault();
   saveNote("day", selectedDay, $("day-note"), $("day-note-status"));
 };
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.altKey ||
+      e.isComposing || e.repeat || e.defaultPrevented ||
+      !(e.target instanceof HTMLTextAreaElement) || !e.target.form)
+    return;
+  e.preventDefault();
+  e.target.form.requestSubmit();
+});
 function noteEditor(period, day, summary, title) {
   const key = `${period}:${day}`,
     wrapper = el(
