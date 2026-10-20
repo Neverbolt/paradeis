@@ -36,6 +36,12 @@ from .services import (
     start_session,
     track_top_task,
     close_task_span,
+    choose_topic,
+    work_at,
+    fit_focus_before,
+    pending_break,
+    start_break,
+    can_auto_start,
     summary,
 )
 
@@ -227,7 +233,7 @@ def state(request, data, prefs, now, active):
         )
     )
     live_block = None
-    for block in Block.objects.filter(user=request.user, date=calendar_day(prefs, now), deleted=False):
+    for block in Block.objects.filter(user=request.user, date=calendar_day(prefs, now), deleted=False).exclude(kind="work"):
         start, end = block_bounds(block, prefs)
         if start <= now < end:
             live_block = serialize_block(block, prefs)
@@ -240,11 +246,19 @@ def state(request, data, prefs, now, active):
         .order_by("-ended_at")
         .first()
     )
+    work = work_at(request.user, prefs, now)
+    first_task = Task.objects.filter(user=request.user, done=False, archived=False).first()
+    waiting_break = pending_break(request.user, prefs, now)
     return JsonResponse(
         {
             "now": now.isoformat(),
+            "default_topic": work.title if work else first_task.title if first_task else "Open focus",
+            "can_auto_start": can_auto_start(request.user, prefs, now, active),
+            "pending_break": serialize_session(waiting_break, now) if waiting_break else None,
             "today": local_day(prefs, now).isoformat(),
             "preferences": {
+                "auto_focus": prefs.auto_focus,
+                "auto_break": prefs.auto_break,
                 "timezone": prefs.timezone,
                 "day_rollover": str(prefs.day_rollover)[:5],
                 "day_start": str(prefs.day_start)[:5],
@@ -387,6 +401,37 @@ def task_update(request, data, prefs, now, active, pk):
 @api(["POST"])
 def timer(request, data, prefs, now, active):
     action = data.get("action")
+    if action == "configure_auto":
+        for field in ["auto_focus", "auto_break"]:
+            if field in data:
+                if type(data[field]) is not bool:
+                    raise ValueError("Choose on or off for automatic timers.")
+                setattr(prefs, field, data[field])
+        latest = Session.objects.filter(user=request.user).order_by("-started_at", "-id").first()
+        prefs.auto_armed = bool(prefs.auto_focus and (active or (latest and
+            latest.status == "completed" and latest.date == local_day(prefs, now))))
+        prefs.save(update_fields=["auto_focus", "auto_break", "auto_armed"])
+        return JsonResponse({"ok": True})
+    if action == "auto_start":
+        if active:
+            return JsonResponse({"ok": True})
+        if not can_auto_start(request.user, prefs, now):
+            raise Conflict("Automatic focus is waiting for available work time.")
+        session = start_session(request.user, prefs, now, auto=True)
+        return JsonResponse({"id": session.id}, status=201)
+    if action in ["start_break", "auto_break"]:
+        if action == "auto_break" and not prefs.auto_break:
+            raise Conflict("Automatic breaks are switched off.")
+        start_break(request.user, prefs, now)
+        return JsonResponse({"ok": True})
+    if action == "set_topic":
+        if not active or active.kind != "focus":
+            raise Conflict("Start a focus timer before changing its topic.")
+        close_task_span(active, now)
+        choose_topic(active, prefs, now, data.get("topic"))
+        active.save(update_fields=["title", "topic_mode", "work_topic", "selected_task"])
+        track_top_task(active, now)
+        return JsonResponse({"ok": True})
     if action == "record_meeting":
         session = record_meeting(request.user, prefs, now, integer(data, "block_id", 1, 2**53 - 1))
         return JsonResponse({"session": serialize_session(session, now)})
@@ -400,10 +445,12 @@ def timer(request, data, prefs, now, active):
             block_id = integer(data, "block_id", 1, 2**53 - 1)
         if type(data.get("ignore_break", False)) is not bool:
             raise ValueError("Invalid break option.")
-        session = start_session(request.user, prefs, now, block_id, data.get("ignore_break", False))
+        session = start_session(request.user, prefs, now, block_id, data.get("ignore_break", False),
+                                topic=data.get("topic"))
         return JsonResponse({"id": session.id}, status=201)
     if action == "skip_break":
         Session.objects.filter(user=request.user, break_until__gt=now).update(break_until=now)
+        Session.objects.filter(user=request.user, pending_break_seconds__gt=0).update(pending_break_seconds=0)
         return JsonResponse({"ok": True})
     if action in ["resize", "overrun"]:
         pk = integer(data, "id", 1, 2**53 - 1)
@@ -448,6 +495,15 @@ def timer(request, data, prefs, now, active):
     elif action == "resume":
         if active.status != "paused":
             raise Conflict("This timer is already running.")
+        _, reserved = next_focus(request.user, prefs, now, True)
+        available = active.remaining_seconds
+        if reserved:
+            available = min(available, max(0, int((block_bounds(reserved, prefs)[0] - now).total_seconds())
+                                           - prefs.short_break * 60))
+        if available < 1:
+            raise Conflict("Wait until the reserved block has ended before resuming focus.")
+        active.remaining_seconds = available
+        active.planned_seconds = active.elapsed_seconds + active.remaining_seconds
         active.deadline = now + timedelta(seconds=active.remaining_seconds)
         check_room(request.user, prefs, now, active.deadline)
         active.resumed_at = now
@@ -459,6 +515,8 @@ def timer(request, data, prefs, now, active):
         close_task_span(active, now)
         active.status = "cancelled"
         active.ended_at = now
+        prefs.auto_armed = False
+        prefs.save(update_fields=["auto_armed"])
     else:
         raise ValueError("Unknown timer action.")
     active.save()
@@ -521,15 +579,17 @@ def block_save(request, data, prefs, now, active, pk=None):
     block.kind = data.get("kind")
     block.title = text(data, "title", 200)
     block.fixed = True
-    if block.kind not in ["meeting", "break"] or not block.title:
-        raise ValueError("Choose a meeting or break and give it a name.")
+    if block.kind not in ["meeting", "work", "break"] or not block.title:
+        raise ValueError("Choose meeting, work, or break and give it a name.")
     if block.start >= block.end:
         raise ValueError("End time must be later than start time on the same day.")
     start, end = block_bounds(block, prefs)
     if end - start > timedelta(hours=12):
         raise ValueError("Blocks can be at most 12 hours long.")
     materialize(request.user, block.date, block.date, calendar_day(prefs, now))
-    check_room(request.user, prefs, start, end, pk)
+    check_room(request.user, prefs, start, end, pk, kind=block.kind)
+    if block.kind != "work" and start >= now:
+        fit_focus_before(active, prefs, now, start)
     sessions = (
         Session.objects.filter(user=request.user)
         .exclude(status="cancelled")
@@ -544,8 +604,8 @@ def block_save(request, data, prefs, now, active, pk=None):
             if session.status == "paused"
             else session.deadline
         )
-        if session_end > start:
-            raise Conflict("This block overlaps a tracked or active session.")
+        if block.kind != "work" and session_end > start:
+            raise Conflict("This block overlaps time already tracked. Choose a later start.")
     block.save()
     if data.get("repeat") and not pk:
         repeat = data["repeat"]
@@ -609,7 +669,7 @@ def recurrences(request, data, prefs, now, active, pk=None):
             if (
                 not template.title
                 or template.frequency not in ["daily", "weekly"]
-                or template.kind not in ["meeting", "break"]
+                or template.kind not in ["meeting", "work", "break"]
                 or template.start >= template.end
             ):
                 raise ValueError("Choose a title, type, and valid time range.")

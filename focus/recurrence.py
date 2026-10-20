@@ -109,6 +109,8 @@ def validate_template(template, today, ignore_block=None):
     for other in BlockTemplate.objects.filter(user=template.user, active=True).exclude(
         pk=template.pk
     ):
+        if (template.kind == "work") != (other.kind == "work"):
+            continue
         if (
             (
                 other.frequency == template.frequency == "weekly"
@@ -140,6 +142,8 @@ def validate_template(template, today, ignore_block=None):
     for block in Block.objects.filter(
         user=template.user, fixed=True, deleted=False, date__gt=today
     ).exclude(pk=ignore_block):
+        if (template.kind == "work") != (block.kind == "work"):
+            continue
         if exception_key(template, block.date) in exceptions or not matches(template, block.date):
             continue
         from types import SimpleNamespace

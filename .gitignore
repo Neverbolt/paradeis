@@ -225,3 +225,6 @@ staticfiles/
 node_modules/
 test-results/
 playwright-report/
+
+# Disposable local UI test databases
+.paradeis-ui-*/

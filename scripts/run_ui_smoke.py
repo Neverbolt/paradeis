@@ -1,6 +1,7 @@
 """Run the DOM/HTTP check against a fresh, disposable local database."""
 
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,11 @@ from pathlib import Path
 
 def main():
     root = Path(__file__).resolve().parent.parent
-    with tempfile.TemporaryDirectory(prefix="paradeis-ui-") as temporary:
+    with tempfile.TemporaryDirectory(prefix=".paradeis-ui-", dir=root) as temporary:
+        with socket.socket() as available:
+            available.bind(("127.0.0.1", 0))
+            port = available.getsockname()[1]
+        base = f"http://127.0.0.1:{port}"
         env = dict(
             os.environ,
             DEBUG="1",
@@ -19,7 +24,8 @@ def main():
             DATABASE_PATH=str(Path(temporary) / "test.sqlite3"),
             PARADEIS_TEST_USER="ui-smoke",
             PARADEIS_TEST_PASSWORD="disposable-ui-test-password",
-            PARADEIS_TEST_URL="http://127.0.0.1:8099",
+            PARADEIS_TEST_URL=base,
+            PARADEIS_SCHEDULING_ONLY="1" if "--scheduling" in sys.argv else "",
         )
         subprocess.run(
             [sys.executable, "manage.py", "migrate", "--noinput"],
@@ -34,7 +40,7 @@ def main():
                 "manage.py",
                 "shell",
                 "-c",
-                "from django.contrib.auth import get_user_model; get_user_model().objects.create_user('ui-smoke', password='disposable-ui-test-password')",
+                "from django.db import connection; assert 'django_session' in connection.introspection.table_names(); from django.contrib.auth import get_user_model; get_user_model().objects.create_user('ui-smoke', password='disposable-ui-test-password')",
             ],
             cwd=root,
             env=env,
@@ -43,7 +49,7 @@ def main():
         )
         with tempfile.TemporaryFile() as log:
             server = subprocess.Popen(
-                [sys.executable, "manage.py", "runserver", "127.0.0.1:8099", "--noreload"],
+                [sys.executable, "manage.py", "runserver", f"127.0.0.1:{port}", "--noreload"],
                 cwd=root,
                 env=env,
                 stdout=log,
@@ -54,7 +60,7 @@ def main():
                     if server.poll() is not None:
                         raise RuntimeError("Local test server exited.")
                     try:
-                        urllib.request.urlopen("http://127.0.0.1:8099/health/", timeout=1).close()
+                        urllib.request.urlopen(f"{base}/health/", timeout=1).close()
                         break
                     except OSError:
                         time.sleep(0.1)
@@ -70,6 +76,7 @@ def main():
                     cwd=root,
                     env=env,
                     check=True,
+                    timeout=180,
                 )
             except Exception:
                 log.seek(0)

@@ -17,12 +17,15 @@ class Preferences(models.Model):
     long_every = models.PositiveSmallIntegerField(default=4)
     next_focus_seconds = models.PositiveIntegerField(null=True, blank=True)
     frozen_through = models.DateField(null=True, blank=True)
+    auto_focus = models.BooleanField(default=False)
+    auto_break = models.BooleanField(default=True)
+    auto_armed = models.BooleanField(default=False)
 
 
 class BlockTemplate(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     title = models.CharField(max_length=200)
-    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("break", "Break")])
+    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("work", "Work"), ("break", "Break")])
     timezone = models.CharField(max_length=64)
     start = models.TimeField()
     end = models.TimeField()
@@ -73,7 +76,7 @@ class Block(models.Model):
     timezone = models.CharField(max_length=64, default="Europe/Brussels")
     start = models.TimeField()
     end = models.TimeField()
-    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("break", "Break")])
+    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("work", "Work"), ("break", "Break")])
     title = models.CharField(max_length=200)
     template = models.ForeignKey(BlockTemplate, null=True, blank=True, on_delete=models.SET_NULL)
     occurrence_date = models.DateField(null=True, blank=True)
@@ -122,6 +125,11 @@ class Session(models.Model):
     effort = models.PositiveSmallIntegerField(null=True)
     reflection = models.TextField(blank=True, max_length=2000)
     reviewed = models.BooleanField(default=False)
+    pending_break_seconds = models.PositiveIntegerField(default=0)
+    topic_mode = models.CharField(max_length=8, default="queue")
+    work_topic = models.CharField(max_length=200, blank=True)
+    selected_task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL,
+                                      related_name="selected_sessions")
 
     class Meta:
         ordering = ["started_at"]

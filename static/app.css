@@ -1169,3 +1169,25 @@ dialog::backdrop {
 .window-unfocused #timer-seconds {
   opacity: .18;
 }
+
+.timer-topic {
+  display: block;
+  width: 100%;
+  margin: -6px 0 10px;
+  padding: 4px 7px;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+}
+.timer-automation {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.timer-automation label {display: inline-flex; align-items: center; gap: 4px; margin: 0; font-size: inherit;}
+.timer-automation input {width: auto; margin: 0; accent-color: var(--green);}
+.work-reservation {display: block; width: 100%; padding: 6px 8px; margin-bottom: 6px; text-align: left; border: 1px dashed var(--green); border-radius: 6px; font-size: 11px; color: var(--green);}
