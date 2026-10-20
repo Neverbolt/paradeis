@@ -694,6 +694,8 @@ def recurrences(request, data, prefs, now, active, pk=None):
                     "frequency": t.frequency,
                     "interval_weeks": t.interval_weeks,
                     "anchor_date": t.anchor_date.isoformat(),
+                    "effective_from": t.effective_from.isoformat(),
+                    "timezone": t.timezone,
                 }
                 for t in BlockTemplate.objects.filter(user=request.user, active=True).order_by(
                     "weekday", "start"

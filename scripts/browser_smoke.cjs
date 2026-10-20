@@ -145,12 +145,47 @@ fs.mkdirSync("test-results", { recursive: true });
           .querySelector("#recurrence-list")
           .textContent.includes("Browser daily"),
     );
-    await page.locator("#recurrence-list button").click();
+    await page.locator("#recurrence-list button").first().click();
     await page.locator("#recurrences-dialog [data-close]").click();
-    assert(await page.locator("#recurrences-dialog").evaluate((d) => d.open));
+    assert.equal(await page.locator("#recurrences-dialog").evaluate((d) => d.open), false);
+    assert(await page.locator("#recurring-view").isVisible());
+    assert.equal(await page.locator(".recurrence-day").count(), 7);
+    assert.equal(await page.locator(".recurrence-card").count(), 7);
+    await page.evaluate(async () => {
+      for (const [offset, title] of [[0, 'Alternating Work A'], [7, 'Alternating Work B']])
+        await api('recurrences/', {title, kind: 'work', frequency: 'weekly', weekday: 0,
+          interval_weeks: 4, anchor_date: shiftDay(monday(state.today), offset), start: '21:45', end: '22:45'});
+      await openRecurrences();
+    });
+    assert.equal(await page.locator('.recurrence-card').count(), 9);
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({width, height: 800});
+      assert(await page.evaluate(() => {
+        for (const day of document.querySelectorAll('.recurrence-day')) {
+          const cards = [...day.querySelectorAll('.recurrence-card')].map(card => card.getBoundingClientRect());
+          for (let i = 0; i < cards.length; i++) for (let j = i + 1; j < cards.length; j++) {
+            const a = cards[i], b = cards[j];
+            if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) return false;
+          }
+        }
+        return document.documentElement.scrollWidth <= window.innerWidth;
+      }), 'Recurring cards stay separate, with scrolling inside the week');
+      await page.locator('#recurrence-list').evaluate(list => list.scrollTop = list.scrollHeight);
+      await page.screenshot({path: `test-results/recurring-week-${width}.png`});
+    }
+    await page.setViewportSize({width: 1280, height: 800});
+    await page.getByRole('button', {name: /^Edit Alternating Work B/}).click();
+    assert.equal(await page.locator('#repeat-title').inputValue(), 'Alternating Work B');
+    await page.locator('#recurrences-dialog [data-close]').click();
     assert.equal(new URL(page.url()).pathname, "/recurring");
-    await page.locator("#recurrences-dialog [data-close]").click();
+    await page.locator("#overview-view").click();
     await page.waitForURL(base + "/overview");
+    await page.goBack();
+    await page.waitForURL(base + '/recurring');
+    await waitFor(() => !document.querySelector('#recurring-view').hidden && document.querySelectorAll('.recurrence-card').length === 9);
+    assert.equal(await page.locator('#recurrences-dialog').evaluate(dialog => dialog.open), false);
+    await page.goForward();
+    await page.waitForURL(base + '/overview');
     await page.locator("#home-link").click();
     await page.waitForURL(base + "/");
     await page.locator("#day-note").fill("Keep this draft through navigation");
@@ -180,11 +215,8 @@ fs.mkdirSync("test-results", { recursive: true });
         (path) =>
           path === "/overview"
             ? !document.querySelector("#overview").hidden
-            : document.querySelector(
-                path === "/recurring"
-                  ? "#recurrences-dialog"
-                  : "#settings-dialog",
-              ).open,
+            : path === "/recurring" ? !document.querySelector("#recurring-view").hidden
+            : document.querySelector("#settings-dialog").open,
         path,
       );
       assert.equal(
