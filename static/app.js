@@ -91,7 +91,8 @@ function duration(value) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 function stats(s) {
-  return `${Math.floor((s?.seconds || 0) / 60)} min · ${s?.count || 0} sessions`;
+  const minutes = Math.floor((s?.seconds || 0) / 60);
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min · ${s?.count || 0} sessions`;
 }
 function renderStats(target, summary) {
   const total = el("span", "sand-total", String(summary?.effort || 0));
