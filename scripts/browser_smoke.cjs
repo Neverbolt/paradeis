@@ -382,6 +382,15 @@ fs.mkdirSync("test-results", { recursive: true });
         await refresh();
       }, workWindow);
       assert(await page.evaluate(end => Date.parse(state.active.end) < Date.parse(end), originalEnd));
+      const work = page.locator('#timeline .work-reservation').filter({hasText: 'Strategy'});
+      assert.equal(await work.locator('.work-reservation-heading').count(), 1);
+      assert(await work.locator('.work-reservation-items .timeline-row').count() >= 2);
+      assert.equal(await work.getByRole('button', {name: 'Edit Strategy call', exact: true}).count(), 1);
+      assert.equal(await work.locator('.work-reservation-range').textContent(), `${workWindow.start}–${workWindow.end}`);
+      assert.equal(await work.locator('.work-reservation-end').textContent(), workWindow.end);
+      await work.locator('.work-reservation-heading').click();
+      assert.equal(await page.locator('#block-name').inputValue(), 'Strategy');
+      await page.getByRole('button', {name: 'Close block editor', exact: true}).click();
       await page.locator("#timer-finish").click();
       await page.waitForSelector("#review-dialog[open]");
       await waitFor(() => !busy);
@@ -399,6 +408,15 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator("#auto-focus").uncheck();
       await waitFor(() => !busy && !state.preferences.auto_focus);
       await page.screenshot({path: "test-results/work-scheduling.png"});
+      await page.setViewportSize({width: 390, height: 844});
+      assert(await work.evaluate(group => {
+        const bounds = group.getBoundingClientRect();
+        return [...group.querySelectorAll('.timeline-item')].every(card => {
+          const rect = card.getBoundingClientRect();
+          return rect.left >= bounds.left && rect.right <= bounds.right + 1;
+        }) && document.documentElement.scrollWidth <= window.innerWidth;
+      }), 'Work contents fit inside the mobile frame');
+      await page.screenshot({path: "test-results/work-scheduling-mobile.png"});
     }
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(

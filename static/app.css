@@ -1190,4 +1190,31 @@ dialog::backdrop {
 }
 .timer-automation label {display: inline-flex; align-items: center; gap: 4px; margin: 0; font-size: inherit;}
 .timer-automation input {width: auto; margin: 0; accent-color: var(--green);}
-.work-reservation {display: block; width: 100%; padding: 6px 8px; margin-bottom: 6px; text-align: left; border: 1px dashed var(--green); border-radius: 6px; font-size: 11px; color: var(--green);}
+.work-reservation {
+  flex-shrink: 0;
+  min-width: 0;
+  padding: 7px;
+  border: 1px solid #b6c5ac;
+  border-left: 3px solid var(--green);
+  border-radius: 9px;
+  background: #edf1e640;
+}
+.work-reservation-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 7px;
+  width: 100%;
+  padding: 2px 3px 7px;
+  text-align: left;
+  color: var(--green);
+  font-size: 11px;
+}
+.work-reservation-label {font-size: 9px; align-self: center; text-transform: uppercase; letter-spacing: .04em;}
+.work-reservation-title {font-weight: 600; overflow-wrap: anywhere;}
+.work-reservation-range {grid-column: 1 / -1; font-size: 10px; font-variant-numeric: tabular-nums;}
+.work-reservation-items {display: flex; flex-direction: column; gap: 5px; min-width: 0;}
+.work-reservation-items:empty {min-height: 12px;}
+.work-reservation-end {margin-top: 7px; padding-top: 4px; border-top: 1px solid #b6c5ac80; text-align: right; font-size: 9px; font-variant-numeric: tabular-nums; color: var(--green);}
+.calendar-day .work-reservation {padding: 5px; border-radius: 7px;}
+.calendar-day .work-reservation-heading {gap: 2px 5px; padding: 1px 1px 5px; font-size: 10px;}
+.calendar-day .work-reservation-range {font-size: 9px;}
