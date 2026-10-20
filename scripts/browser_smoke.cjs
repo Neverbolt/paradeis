@@ -161,6 +161,29 @@ fs.mkdirSync("test-results", { recursive: true });
     for (const width of [1280, 390]) {
       await page.setViewportSize({width, height: 800});
       assert(await page.evaluate(() => {
+        const original = templates;
+        try {
+          const lengths = [1, 5, 15, 30, 60, 120];
+          const make = (id, start, end) => ({id, title: 'Duration ' + id, kind: 'meeting',
+            frequency: 'weekly', weekday: 0, interval_weeks: 1,
+            anchor_date: monday(state.today), effective_from: '1970-01-01', start, end});
+          templates = lengths.map((minutes, index) => make(index + 1, '09:00',
+            String(9 + Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0')));
+          templates.push(make(7, '11:00', '11:05'));
+          renderRecurrenceWeek();
+          const cards = [...document.querySelectorAll('.recurrence-card')];
+          const heights = cards.slice(0, 6).map(card => card.getBoundingClientRect().height);
+          const adjacent = cards[6].getBoundingClientRect(), longest = cards[5].getBoundingClientRect();
+          return heights.every((height, index) => Math.abs(height - lengths[index]) < .1) &&
+            Math.abs(adjacent.top - longest.bottom) < .1 &&
+            adjacent.width > longest.width * 5 &&
+            cards.every(card => card.title.includes(card.querySelector('strong').textContent));
+        } finally {
+          templates = original;
+          renderRecurrenceWeek();
+        }
+      }), 'Recurring heights follow real duration, including short and adjacent blocks');
+      assert(await page.evaluate(() => {
         for (const day of document.querySelectorAll('.recurrence-day')) {
           const cards = [...day.querySelectorAll('.recurrence-card')].map(card => card.getBoundingClientRect());
           for (let i = 0; i < cards.length; i++) for (let j = i + 1; j < cards.length; j++) {

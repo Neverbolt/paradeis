@@ -1057,7 +1057,7 @@ function recurrenceMonthDates(template, today) {
 function recurrenceLayout(items) {
   const minute = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
   const sorted = items.map(template => ({template, start: minute(template.start),
-    end: Math.max(minute(template.end), minute(template.start) + 90)}))
+    end: minute(template.end)}))
     .sort((a, b) => a.start - b.start || a.end - b.end || a.template.id - b.template.id);
   let cluster = [], lanes = [], stop = -1;
   const finish = () => cluster.forEach(item => item.columns = lanes.length);
@@ -1114,13 +1114,20 @@ function renderRecurrenceWeek() {
         `Edit ${t.title} · ${name} · ${t.start}–${t.end} · ${cadence}`);
       card.dataset.templateId = t.id;
       card.style.top = `${item.start - start}px`;
-      card.style.height = `${item.end - item.start - 3}px`;
+      const duration = item.end - item.start;
+      card.style.height = `${duration}px`;
+      if (duration < 30) card.classList.add("compact");
+      if (duration < 60) card.classList.add("brief");
       card.style.left = `calc(${item.lane / item.columns * 100}% + 2px)`;
       card.style.width = `calc(${100 / item.columns}% - 4px)`;
-      card.append(el("span", "recurrence-card-time", `${t.start}–${t.end}`),
-        el("strong", "", t.title), el("span", "", `${t.kind === "work" ? "Work" : t.kind === "meeting" ? "Meeting" : "Break"} · ${cadence}`),
+      const body = el("span", "recurrence-card-body");
+      body.append(el("strong", "", t.title), el("span", "recurrence-card-time", `${t.start}–${t.end}`),
+        el("span", "recurrence-card-detail", `${t.kind === "work" ? "Work" : t.kind === "meeting" ? "Meeting" : "Break"} · ${cadence}`),
         el("span", "recurrence-card-dates", monthDates));
-      if (t.timezone && t.timezone !== state.preferences.timezone) card.append(el("span", "", t.timezone));
+      if (t.timezone && t.timezone !== state.preferences.timezone)
+        body.append(el("span", "recurrence-card-detail", t.timezone));
+      card.append(body);
+      card.setAttribute("aria-description", `${monthDates}${t.timezone ? ` · ${t.timezone}` : ""}`);
       card.title = `${t.title} · ${t.start}–${t.end} · ${cadence} · ${monthDates}${t.timezone ? ` · ${t.timezone}` : ""}`;
       slots.append(card);
     }
