@@ -7,6 +7,7 @@ import sys
 import tempfile
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -34,13 +35,20 @@ def main():
             check=True,
             stdout=subprocess.DEVNULL,
         )
+        # Keep browser layout fixtures around local noon, with planned pomos
+        # available even when CI runs after the default workday has ended.
+        fixture_timezone = f"Etc/GMT{datetime.now(timezone.utc).hour - 12:+d}"
+        browser_preferences = (
+            f"; from focus.models import Preferences; Preferences.objects.create(user=user, timezone={fixture_timezone!r})"
+            if "--browser" in sys.argv else ""
+        )
         subprocess.run(
             [
                 sys.executable,
                 "manage.py",
                 "shell",
                 "-c",
-                "from django.db import connection; assert 'django_session' in connection.introspection.table_names(); from django.contrib.auth import get_user_model; get_user_model().objects.create_user('ui-smoke', password='disposable-ui-test-password')",
+                "from django.db import connection; assert 'django_session' in connection.introspection.table_names(); from django.contrib.auth import get_user_model; user = get_user_model().objects.create_user('ui-smoke', password='disposable-ui-test-password')" + browser_preferences,
             ],
             cwd=root,
             env=env,
