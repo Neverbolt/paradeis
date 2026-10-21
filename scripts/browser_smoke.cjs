@@ -30,6 +30,36 @@ fs.mkdirSync("test-results", { recursive: true });
       page.getByRole("button", { name: "Sign in" }).click(),
     ]);
     await page.waitForSelector(".current-time");
+    await page.waitForSelector('#day-plan-dialog[open]');
+    assert(await page.locator('#day-plan-goal').evaluate(el => el === document.activeElement));
+    assert.equal(await page.locator('#task-list .task-row').count(), 0);
+    await page.keyboard.press('Escape');
+    assert(await page.locator('#day-plan-dialog').evaluate(el => el.open));
+    await page.locator('#day-plan-goal').fill('A deliberate new goal');
+    await page.locator('#day-plan-goal').press('Enter');
+    await waitFor(() => !busy && document.querySelector('#day-plan-goal').value === '');
+    await page.locator('#day-plan-previous button').first().click();
+    await waitFor(() => !busy && document.querySelectorAll('#day-plan-goals button').length === 2);
+    await page.screenshot({path: 'test-results/day-planning-1280.png'});
+    await page.setViewportSize({width: 390, height: 844});
+    await page.screenshot({path: 'test-results/day-planning-390.png'});
+    const planBounds = await page.locator('#day-plan-dialog').boundingBox();
+    assert(planBounds.x >= 0 && planBounds.x + planBounds.width <= 391);
+    await page.reload();
+    await page.waitForSelector('#day-plan-dialog[open]');
+    assert.equal(await page.locator('#day-plan-goals button').count(), 2);
+    assert.equal(await page.locator('#day-plan-previous button:disabled').count(), 1);
+    while (await page.locator('#day-plan-goals button').count()) {
+      const count = await page.locator('#day-plan-goals button').count();
+      await page.locator('#day-plan-goals button').first().click();
+      await waitFor(n => !busy && document.querySelectorAll('#day-plan-goals button').length < n, count);
+    }
+    await page.locator('#day-plan-start').click();
+    await waitFor(() => !busy && !document.querySelector('#day-plan-dialog').open);
+    await page.reload();
+    await page.waitForSelector('.current-time');
+    assert.equal(await page.locator('#day-plan-dialog[open]').count(), 0);
+    await page.setViewportSize({width: 1280, height: 800});
     await page.bringToFront();
     await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
     // Headless Chromium keeps page focus emulated across tabs; exercise the
@@ -108,8 +138,8 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector("#completed-task-list .checked");
     assert.equal(await page.locator("#task-list .task-row").count(), 0);
     await page.locator("#overview-view").click();
-    await page.waitForSelector(".completed-result");
-    assert((await page.locator(".completed-result").first().textContent()).includes("Browser task"));
+    await page.waitForSelector(".calendar-day.today .completed-result");
+    assert((await page.locator(".calendar-day.today .completed-result").allTextContents()).some(text => text === "✓ Browser task"));
     await page.locator("#today-view").click();
     await page.locator("#completed-task-list .task-check").click();
     await page.waitForSelector("#task-list .task-check");

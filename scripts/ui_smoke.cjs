@@ -339,6 +339,9 @@ async function checkSchedulingUI(w) {
         let response = await fetchWithCookies(url, options);
         if (overrideToday && String(url).includes("/api/state/")) {
           const data = await response.json();
+          data.day_plan = {...data.day_plan, date: overrideToday, ready: false,
+            previous_date: data.today, previous_tasks: data.tasks};
+          data.tasks = [];
           data.today = overrideToday;
           data.day.date = new URL(url, base).searchParams.get("date") || overrideToday;
           response = { ok: true, status: 200, json: async () => data };
@@ -393,6 +396,31 @@ async function checkSchedulingUI(w) {
   const change = (id) =>
     $(id).dispatchEvent(new w.Event("input", { bubbles: true }));
   await waitFor(() => $("timeline").children.length > 0, "initial state");
+  await waitFor(() => $("day-plan-dialog").open, "daily planning opens first");
+  assert.equal(w.document.activeElement, $("day-plan-goal"));
+  assert.equal($("task-list").children.length, 0);
+  assert.equal($("day-plan-previous").children.length, 2);
+  const cancelPlan = new w.Event("cancel", {cancelable: true});
+  $("day-plan-dialog").dispatchEvent(cancelPlan);
+  assert(cancelPlan.defaultPrevented, "Planning requires an explicit Start day");
+  $("day-plan-goal").value = "A deliberate new goal";
+  submit("day-plan-goal-form");
+  await waitFor(() => $("day-plan-goal").value === "" && !w.eval("busy"), "persist new daily goal");
+  $("day-plan-previous").querySelector("button").click();
+  await waitFor(() => $("day-plan-goals").children.length === 2 && !w.eval("busy"), "explicit carry");
+  assert.equal($("day-plan-previous").querySelector("button").textContent, "Added ✓");
+  await w.refresh();
+  assert.equal($("day-plan-goals").children.length, 2, "Draft plan persists across state loads");
+  assert.equal($("day-plan-previous").querySelectorAll("button:disabled").length, 1);
+  while ($("day-plan-goals").querySelector("button")) {
+    const count = $("day-plan-goals").querySelectorAll("button").length;
+    $("day-plan-goals").querySelector("button").click();
+    await waitFor(() => $("day-plan-goals").querySelectorAll("button").length < count && !w.eval("busy"), "remove planning fixture");
+  }
+  await click("day-plan-start");
+  await waitFor(() => !$("day-plan-dialog").open && !w.eval("busy"), "start day");
+  await w.refresh();
+  assert(!$("day-plan-dialog").open, "Planning completion persists");
   if (process.env.PARADEIS_SCHEDULING_ONLY === "1") {
     await checkSchedulingUI(w);
     assert.deepEqual(errors, [], "No JavaScript errors");
@@ -435,7 +463,7 @@ async function checkSchedulingUI(w) {
   assert.equal(completedState.tasks.find(t => t.done).completed_on, completedState.today);
   await click("overview-view");
   await waitFor(() => w.document.querySelector(".day-completed-tasks"), "completed task in calendar");
-  assert(w.document.querySelector(".completed-result").textContent.includes("Updated proposal"));
+  assert([...w.document.querySelectorAll(".calendar-day.today .completed-result")].some(row => row.textContent.includes("✓ Updated proposal")));
   await click("today-view");
   $("completed-task-list").querySelector(".task-check").click();
   await waitFor(
@@ -682,7 +710,9 @@ async function checkSchedulingUI(w) {
   overrideToday = tomorrowDay.toISOString().slice(0, 10);
   await w.refresh();
   assert($("timeline-date").textContent.includes(String(tomorrowDay.getUTCDate())));
-  assert.equal($("task-list").children.length, 2, "Pending tasks survive midnight");
+  assert.equal($("task-list").children.length, 0, "New day starts with no carried tasks");
+  assert($("day-plan-dialog").open, "New day requires conscious planning");
+  assert.equal($("day-plan-previous").children.length, saved.tasks.length);
   overrideToday = undefined;
   await w.refresh();
   await w.loadDayNote();

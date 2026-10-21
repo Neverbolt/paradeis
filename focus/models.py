@@ -63,11 +63,26 @@ class Task(models.Model):
     completed_on = models.DateField(null=True, blank=True)
     archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+    goal_date = models.DateField(null=True, blank=True)
+    carried_from = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL,
+                                     related_name="carried_goals")
 
     class Meta:
         ordering = ["position", "id"]
-        indexes = [models.Index(fields=["user", "archived", "position"]),
+        constraints = [models.UniqueConstraint(fields=["user", "goal_date", "carried_from"],
+                                               name="one_goal_carry_per_day")]
+        indexes = [models.Index(fields=["user", "goal_date"]),
+                   models.Index(fields=["user", "archived", "position"]),
                    models.Index(fields=["user", "completed_on"])]
+
+
+class DayPlan(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    date = models.DateField()
+    started_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "date"], name="one_day_plan")]
 
 
 class Block(models.Model):

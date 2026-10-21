@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from .models import Allocation, Block, Preferences, Session, Task, TaskFocusSpan
+from .models import Allocation, Block, DayPlan, Preferences, Session, Task, TaskFocusSpan
 
 
 class Conflict(ValueError):
@@ -66,6 +66,10 @@ def work_at(user, prefs, now):
     return None
 
 
+def daily_tasks(user, prefs, now):
+    return Task.objects.filter(user=user, goal_date=local_day(prefs, now), archived=False)
+
+
 def session_topic(session):
     if session.topic_mode == "work":
         return None, session.work_topic
@@ -73,9 +77,9 @@ def session_topic(session):
         return None, "Open focus"
     if session.topic_mode == "task" and session.selected_task_id:
         task = session.selected_task
-        if not task.done and not task.archived:
+        if not task.done and not task.archived and task.goal_date == session.date:
             return task, task.title
-    task = session.user.task_set.filter(done=False, archived=False).first()
+    task = Task.objects.filter(user=session.user, goal_date=session.date, done=False, archived=False).first()
     return task, task.title if task else "Open focus"
 
 
@@ -90,7 +94,7 @@ def choose_topic(session, prefs, now, topic=None):
         if not 1 <= int(topic) <= 2**53 - 1:
             raise ValueError("Choose a valid focus topic.")
         session.selected_task = Task.objects.get(user=session.user, id=int(topic),
-                                                done=False, archived=False)
+                                                done=False, archived=False, goal_date=local_day(prefs, now))
         session.topic_mode = "task"
     else:
         work = work_at(session.user, prefs, now)
@@ -215,7 +219,7 @@ def next_focus(user, prefs, now, ignore_break=False):
 def start_session(user, prefs, now, block_id=None, ignore_break=False, topic=None, auto=False):
     if Session.objects.filter(user=user, status__in=["running", "paused"]).exists():
         raise Conflict("A timer is already active. Refresh to see it.")
-    task = user.task_set.filter(done=False, archived=False).first()
+    task = daily_tasks(user, prefs, now).filter(done=False).first()
     block = None
     kind, title = "focus", task.title if task else "Open focus"
     seconds, upcoming = next_focus(user, prefs, now, ignore_break)
@@ -592,6 +596,8 @@ def auto_window_end(user, prefs, now):
 
 def can_auto_start(user, prefs, now, active=None):
     if active or not prefs.auto_focus or not prefs.auto_armed:
+        return False
+    if not DayPlan.objects.filter(user=user, date=local_day(prefs, now)).exists():
         return False
     latest = Session.objects.filter(user=user).order_by("-started_at", "-id").first()
     if not latest or latest.status != "completed" or latest.date != local_day(prefs, now):

@@ -5,7 +5,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 
-from .models import Block, Session, Task
+from .models import Block, DayPlan, Session, Task
 from .services import preferences
 from .tests import NOW
 import json
@@ -17,7 +17,8 @@ class SchedulingTests(TestCase):
         self.user = get_user_model().objects.create_user("scheduler")
         self.client.force_login(self.user)
         self.prefs = preferences(self.user)
-        self.task = Task.objects.create(user=self.user, title="Inbox")
+        DayPlan.objects.create(user=self.user, date=date(2026, 10, 7))
+        self.task = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Inbox")
         self.clock = patch("focus.views.timezone.now", return_value=NOW)
         self.clock.start()
         self.addCleanup(self.clock.stop)
@@ -137,7 +138,7 @@ class SchedulingTests(TestCase):
         self.assertEqual(session.title, "Inbox")
         self.post("/api/timer/", {"action": "cancel", "id": session.id}, 1)
         other = get_user_model().objects.create_user("other")
-        foreign = Task.objects.create(user=other, title="Private")
+        foreign = Task.objects.create(goal_date=date(2026, 10, 7), user=other, title="Private")
         self.assertEqual(self.post("/api/timer/", {"action": "start", "topic": str(foreign.id)}, 1).status_code, 404)
         self.assertFalse(Session.objects.filter(status="running").exists())
         self.assertEqual(self.start(1, topic="open").title, "Open focus")

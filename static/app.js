@@ -204,6 +204,7 @@ async function refresh() {
   calendarAnchor ||= month(data.today);
   $("error").hidden = true;
   renderDay();
+  renderDayPlan();
   tick();
   clearTimeout(deadlineTimeout);
   if (data.active?.status === "running") {
@@ -223,6 +224,97 @@ async function refresh() {
       openReview(finished);
   }
 }
+let dayPlanSignature = "", dayPlanManual = false;
+function renderDayPlan() {
+  const plan = state?.day_plan, dialog = $("day-plan-dialog");
+  if (!plan) return;
+  if (dialog.dataset.date !== plan.date) {
+    dialog.dataset.date = plan.date;
+    $("day-plan-goal").value = "";
+    dayPlanManual = false;
+    dayPlanSignature = "";
+  }
+  if (plan.ready && !dayPlanManual) {
+    if (dialog.open) dialog.close();
+    return;
+  }
+  $("day-plan-date").textContent = dateLabel(plan.date, {weekday: "short", month: "short", day: "numeric"});
+  $("day-plan-previous-date").textContent = dateLabel(plan.previous_date, {month: "short", day: "numeric"});
+  $("day-plan-start").textContent = plan.ready ? "Done" : "Start day";
+  const goals = state.tasks.filter(t => !t.done);
+  const signature = JSON.stringify([plan.previous_tasks, goals]);
+  if (signature !== dayPlanSignature) {
+    dayPlanSignature = signature;
+    $("day-plan-count").textContent = goals.length;
+    const todayList = $("day-plan-goals");
+    todayList.replaceChildren();
+    for (const goal of goals) {
+      const row = el("div", "day-plan-row");
+      row.append(el("span", "goal-label", goal.title),
+        button("×", "icon-button muted", () => mutate(`tasks/${goal.id}/`,
+          {action: "archive"}, dialog, false), `Remove ${goal.title} from today`));
+      todayList.append(row);
+    }
+    if (!goals.length) todayList.append(el("p", "small muted day-plan-empty", "A fresh start. What would you like to do today?"));
+    const previous = $("day-plan-previous");
+    previous.replaceChildren();
+    for (const goal of plan.previous_tasks) {
+      const row = el("div", "day-plan-row");
+      const label = el("span", `goal-label${goal.done ? " goal-done" : ""}`, goal.title);
+      label.append(el("small", "", goal.done ? "Completed" : "Unfinished"));
+      const added = state.tasks.some(t => t.carried_from_id === goal.id);
+      const carry = button(added ? "Added ✓" : "Bring over", "secondary small", () =>
+        mutate("tasks/carry/", {task_id: goal.id, date: plan.date}, dialog, false),
+        `${added ? "Added" : "Bring into today:"} ${goal.title}`);
+      carry.disabled = added || busy;
+      carry.dataset.added = String(added);
+      row.append(label, carry);
+      previous.append(row);
+    }
+    if (!plan.previous_tasks.length)
+      previous.append(el("p", "small muted day-plan-empty", "No goals from yesterday."));
+  }
+  if (!dialog.open && !document.querySelector("dialog[open]")) {
+    openDialog(dialog);
+    $("day-plan-goal").focus();
+  }
+}
+$("day-plan-dialog").addEventListener("cancel", e => {
+  if (!state?.day_plan?.ready) e.preventDefault();
+});
+$("day-plan-dialog").addEventListener("close", () => {
+  dayPlanManual = false;
+  if (!state?.day_plan?.ready) renderDayPlan();
+});
+for (const dialog of document.querySelectorAll("dialog:not(#day-plan-dialog)"))
+  dialog.addEventListener("close", () => queueMicrotask(renderDayPlan));
+$("day-plan-open").onclick = () => {
+  dayPlanManual = true;
+  dayPlanSignature = "";
+  renderDayPlan();
+};
+$("day-plan-goal-form").onsubmit = async e => {
+  e.preventDefault();
+  if (await mutate("tasks/", {title: $("day-plan-goal").value, date: state.day_plan.date},
+      $("day-plan-dialog"), false)) {
+    $("day-plan-goal").value = "";
+    $("day-plan-goal").focus();
+  }
+};
+$("day-plan-start").onclick = async () => {
+  const input = $("day-plan-goal");
+  if (input.value.trim()) {
+    if (!input.reportValidity() || !await mutate("tasks/", {title: input.value, date: state.day_plan.date},
+        $("day-plan-dialog"), false)) return;
+    input.value = "";
+  }
+  if (await mutate("day-plan/", {date: state.day_plan.date}, $("day-plan-dialog"), false)) {
+    dayPlanManual = false;
+    renderDayPlan();
+    await applyRoute();
+  }
+};
+
 function renderDay() {
   $("timezone-label").textContent = state.preferences.timezone;
   $("timeline-date").textContent = dateLabel(state.day.date, {
@@ -784,6 +876,9 @@ function tick() {
       refresh().catch(showError);
     }
   }
+  $("day-plan-start").disabled = busy;
+  for (const control of $("day-plan-dialog").querySelectorAll("button:not(#day-plan-start)"))
+    control.disabled = busy || control.dataset.added === "true";
   const automaticBreak = waitingBreak && state.preferences.auto_break;
   if (!busy && !autoStarting && now() >= autoRetryAt && (automaticBreak || state.can_auto_start)) {
     autoStarting = true;
@@ -1437,8 +1532,10 @@ async function loadCalendar({ target, preserve = false } = {}) {
 }
 function completedTasks(day) {
   const group = el("section", "day-completed-tasks");
-  group.setAttribute("aria-label", "Completed tasks");
-  group.append(el("h3", "small muted", "Completed"));
+  const unfinished = (day.goals || []).filter(t => !t.done);
+  group.setAttribute("aria-label", "Day goals");
+  group.append(el("h3", "small muted", unfinished.length ? "Goals" : "Completed"));
+  for (const task of unfinished) group.append(el("p", "completed-result", `○ ${task.title}`));
   for (const task of day.completed_tasks || []) {
     const row = el("p", "completed-result", `✓ ${task.title}`);
     group.append(row);
@@ -1473,7 +1570,7 @@ function renderCalendar() {
       timeline,
       noteEditor("day", day.date, day.summary, day.date),
     );
-    if (day.completed_tasks?.length) card.lastChild.prepend(completedTasks(day));
+    if (day.completed_tasks?.length || day.goals?.some(t => !t.done)) card.lastChild.prepend(completedTasks(day));
     grid.append(card);
   });
   for (let i = 0; i < days.length; i += 7)
@@ -1583,7 +1680,7 @@ $("calendar-today").onclick = () => {
 };
 $("task-form").onsubmit = async (e) => {
   e.preventDefault();
-  if (await mutate("tasks/", { title: $("task-title").value }))
+  if (await mutate("tasks/", { title: $("task-title").value, date: state.today }))
     $("task-title").value = "";
 };
 function openSettings() {
@@ -1644,6 +1741,7 @@ for (const id of ["settings-dialog"])
       setRoute(recurringVisible ? "/recurring" : overviewVisible ? "/overview" : "/");
   });
 async function applyRoute() {
+  if (state?.day_plan && !state.day_plan.ready) { renderDayPlan(); return; }
   const path = location.pathname;
   closeRouteDialogs();
   if (path === "/overview") await showView(true, false);
@@ -1740,7 +1838,7 @@ async function notifyEnd(s) {
   }
 }
 window.addEventListener("beforeunload", (e) => {
-  if (drafts.size || taskDrafts.size) {
+  if (drafts.size || taskDrafts.size || $("day-plan-goal").value.trim()) {
     e.preventDefault();
     e.returnValue = "";
   }
