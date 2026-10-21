@@ -178,7 +178,43 @@ async function checkManualPomoUI(w) {
   await w.changeDay(today);
 }
 
+function checkBlockKeyboardUI(w) {
+  const $ = id => w.document.getElementById(id);
+  const input = (id, value) => {
+    $(id).value = value;
+    $(id).dispatchEvent(new w.Event('input', {bubbles: true}));
+  };
+  w.openBlock();
+  assert.equal(w.document.activeElement, $('block-name'));
+  assert($('block-start').compareDocumentPosition($('block-date')) & 4);
+  assert($('block-end').compareDocumentPosition($('block-date')) & 4);
+  $('block-start').focus();
+  input('block-start', '09:10');
+  assert.equal($('block-end').value, '09:40');
+  assert.equal(w.document.activeElement, $('block-start'), 'Typing the hour cannot steal focus');
+  input('block-start', '10:45');
+  assert.equal($('block-end').value, '11:15');
+  $('block-start').dispatchEvent(new w.KeyboardEvent('keydown', {key: 'Enter', bubbles: true, cancelable: true}));
+  assert.equal(w.document.activeElement, $('block-end'));
+  input('block-end', '12:00');
+  input('block-start', '11:00');
+  assert.equal($('block-end').value, '12:00', 'Explicit end times are preserved');
+  $('block-dialog').close();
+  w.openBlock();
+  input('block-start', '23:45');
+  assert.equal($('block-end').value, '23:59', 'Same-day blocks cannot wrap through midnight');
+  input('block-start', '');
+  assert.equal($('block-end').value, '23:59', 'Incomplete input cannot clear the suggested end');
+  $('block-dialog').close();
+  w.openBlock({id: 987, title: 'Existing', kind: 'meeting', date: w.eval('state.today'),
+    start_time: '09:00', end_time: '10:45'});
+  input('block-start', '09:30');
+  assert.equal($('block-end').value, '10:45', 'Editing an existing block preserves its end');
+  $('block-dialog').close();
+}
+
 async function checkSchedulingUI(w) {
+  checkBlockKeyboardUI(w);
   checkWorkWrappingUI(w);
   const pattern = (id, start, end) => ({id, start, end});
   const lanes = w.recurrenceLayout([pattern(1, "09:00", "12:00"), pattern(2, "09:00", "10:30"),

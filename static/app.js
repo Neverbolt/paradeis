@@ -6,7 +6,7 @@ let state,
   busy = false,
   overviewVisible = false,
   recurringVisible = false;
-let reviewFocus = null;
+let reviewFocus = null, blockEndEdited = false;
 let reviewing,
   editingBlock,
   templates = [],
@@ -1039,23 +1039,38 @@ $("manual-pomo-form").onsubmit = async e => {
 };
 function openBlock(b = null) {
   editingBlock = b;
+  blockEndEdited = !!b;
   const rounded = Math.ceil((now() + 1) / 300000) * 300000;
   $("block-kind").value = b?.kind || "meeting";
   $("block-name").value = b?.title || "";
   $("block-date").value =
     b?.date || (selectedDay === state.today ? localDate(rounded) : selectedDay);
   $("block-start").value = b?.start_time || clock(rounded);
-  $("block-end").value =
-    b?.end_time ||
-    (localDate(rounded + 3600000) === localDate(rounded)
-      ? clock(rounded + 3600000)
-      : "23:59");
+  $("block-end").value = b?.end_time || "";
+  updateBlockEnd();
   $("block-delete").hidden = !b;
   $("block-repeat-controls").hidden = !!b;
   $("block-repeat").checked = false;
   $("block-template-edit").hidden = !b?.template_id;
   openDialog($("block-dialog"));
+  $("block-name").focus();
 }
+function updateBlockEnd() {
+  const start = $("block-start");
+  if (blockEndEdited || !start.validity.valid || !/^\d{2}:\d{2}$/.test(start.value)) return;
+  const [hour, minute] = start.value.split(":").map(Number);
+  const end = Math.min(hour * 60 + minute + 30, 1439);
+  $("block-end").value = `${String(Math.floor(end / 60)).padStart(2, "0")}:${String(end % 60).padStart(2, "0")}`;
+}
+$("block-start").oninput = $("block-start").onchange = updateBlockEnd;
+$("block-end").oninput = $("block-end").onchange = () => { blockEndEdited = true; };
+$("block-start").onkeydown = e => {
+  if (e.key !== "Enter" || e.isComposing || e.repeat || e.ctrlKey || e.altKey || e.metaKey ||
+      !$("block-start").value || !$("block-start").validity.valid) return;
+  e.preventDefault();
+  updateBlockEnd();
+  $("block-end").focus();
+};
 $("block-open").onclick = () => openBlock();
 $("block-form").onsubmit = (e) => {
   e.preventDefault();
