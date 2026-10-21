@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 
-from .models import Block, Session, Task
+from .models import Block, DayPlan, Session, Task
 from .services import block_bounds, instant, plan, preferences
 
 NOW = datetime(2026, 10, 7, 7, 0, tzinfo=timezone.utc)  # 09:00 Brussels
@@ -19,7 +19,8 @@ class AppTests(TestCase):
         self.other = get_user_model().objects.create_user("bob", password="another-password")
         self.client.force_login(self.user)
         self.prefs = preferences(self.user)
-        self.task = Task.objects.create(user=self.user, title="Write the proposal")
+        DayPlan.objects.create(user=self.user, date=date(2026, 10, 7))
+        self.task = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Write the proposal")
         self.clock = patch("focus.views.timezone.now", return_value=NOW)
         self.clock.start()
         self.addCleanup(self.clock.stop)
@@ -60,8 +61,8 @@ class AppTests(TestCase):
         self.assertEqual(response.json()["preferences"]["day_start"], "09:00")
 
     def test_task_order_persists_and_sets_next_focus_task(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
-        done = Task.objects.create(user=self.user, title="Done", done=True, position=8,
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
+        done = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Done", done=True, position=8,
                                    completed_on=date(2026, 10, 7))
         ids = [second.id, self.task.id]
         response = self.post("/api/tasks/reorder/", {"ids": ids})
@@ -76,8 +77,8 @@ class AppTests(TestCase):
         self.assertEqual(session.allocations.get().task, second)
 
     def test_focus_collects_tasks_after_thirty_seconds_and_ignores_brief_switches(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
-        brief = Task.objects.create(user=self.user, title="Brief", position=2)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
+        brief = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Brief", position=2)
         session = self.start()
         self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, NOW + timedelta(seconds=30))
         self.post("/api/tasks/reorder/", {"ids": [brief.id, second.id]}, NOW + timedelta(seconds=60))
@@ -92,7 +93,7 @@ class AppTests(TestCase):
         self.assertEqual(session.allocations.count(), 2)
 
     def test_focus_task_time_is_cumulative_and_excludes_pause(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
         session = self.start()
         self.post("/api/tasks/reorder/", {"ids": [second.id, self.task.id]}, NOW + timedelta(seconds=15))
         self.post("/api/timer/", {"action": "pause", "id": session.id}, NOW + timedelta(seconds=35))
@@ -102,7 +103,7 @@ class AppTests(TestCase):
         self.assertEqual(list(session.allocations.values_list("task_id", flat=True)), [self.task.id])
 
     def test_focus_natural_completion_caps_task_time_at_deadline(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
         session = self.start()
         self.post("/api/tasks/reorder/", {"ids": [second.id, self.task.id]},
                   NOW + timedelta(minutes=24, seconds=31))
@@ -112,7 +113,7 @@ class AppTests(TestCase):
         self.assertEqual(list(session.allocations.values_list("task_id", flat=True)), [self.task.id])
 
     def test_focus_tasks_survive_rename_archive_and_overrun(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
         session = self.start()
         self.post(f"/api/tasks/{self.task.id}/", {"action": "archive"}, NOW + timedelta(seconds=30))
         self.post(f"/api/tasks/{second.id}/", {"action": "rename", "title": "Renamed"}, NOW + timedelta(seconds=45))
@@ -125,7 +126,7 @@ class AppTests(TestCase):
                          ["Write the proposal", "Second"])
 
     def test_focus_keeps_distinct_tasks_with_the_same_name(self):
-        second = Task.objects.create(user=self.user, title=self.task.title, position=1)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title=self.task.title, position=1)
         session = self.start()
         self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, NOW + timedelta(seconds=30))
         self.finish(session, NOW + timedelta(seconds=60))
@@ -133,7 +134,7 @@ class AppTests(TestCase):
                          [self.task.id, second.id])
 
     def test_focus_overrun_preserves_manual_review_and_tracks_new_task(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
         session = self.start()
         self.finish(session)
         self.post(f"/api/sessions/{session.id}/review/", {"allocations": [
@@ -146,10 +147,10 @@ class AppTests(TestCase):
                          [("Custom description", 4), ("Second", 0)])
 
     def test_task_reorder_rejects_stale_and_invalid_lists_atomically(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
-        foreign = Task.objects.create(user=self.other, title="Private")
-        done = Task.objects.create(user=self.user, title="Done", done=True)
-        archived = Task.objects.create(user=self.user, title="Archived", archived=True)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
+        foreign = Task.objects.create(goal_date=date(2026, 10, 7), user=self.other, title="Private")
+        done = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Done", done=True)
+        archived = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Archived", archived=True)
         for ids in ([second.id], [second.id, second.id], [second.id, foreign.id],
                     [second.id, done.id], [second.id, archived.id]):
             with self.subTest(ids=ids):
@@ -280,7 +281,7 @@ class AppTests(TestCase):
         )
 
     def test_review_supports_multiple_tasks_and_counts_effort_once(self):
-        second = Task.objects.create(user=self.user, title="Answer mail")
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Answer mail")
         session = self.start()
         self.finish(session, NOW + timedelta(minutes=20))
         review = {
@@ -428,8 +429,8 @@ class AppTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             Session.objects.filter(pk=session.pk).update(focus_score=4)
 
-    def test_task_completion_stays_with_local_day_and_pending_tasks_carry_forward(self):
-        pending = Task.objects.create(user=self.user, title="Tomorrow", position=1)
+    def test_tasks_stay_with_their_day_without_automatic_carry(self):
+        pending = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Tomorrow", position=1)
         late = datetime(2026, 10, 7, 21, 59, tzinfo=timezone.utc)
         self.assertEqual(self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, late).status_code, 200)
         self.task.refresh_from_db()
@@ -438,9 +439,13 @@ class AppTests(TestCase):
             today = self.client.get("/api/state/").json()
             previous = self.client.get("/api/state/?date=2026-10-07").json()
         self.assertEqual(today["today"], "2026-10-08")
-        self.assertEqual([t["id"] for t in today["tasks"]], [pending.id])
+        self.assertEqual(today["tasks"], [])
+        self.assertFalse(today["day_plan"]["ready"])
+        self.assertEqual({t["id"] for t in today["day_plan"]["previous_tasks"]}, {pending.id, self.task.id})
+        self.assertEqual(today["default_topic"], "Open focus")
         self.assertEqual(previous["day"]["completed_tasks"][0]["id"], self.task.id)
-        self.assertEqual(set(t["id"] for t in previous["tasks"]), {self.task.id, pending.id})
+        self.assertEqual(previous["tasks"], [])
+        self.assertEqual({t["id"] for t in previous["day"]["goals"]}, {self.task.id, pending.id})
         self.assertEqual(Task.objects.filter(user=self.user).count(), 2)
         history = self.client.get("/api/history/?start=2026-10-07&end=2026-10-08").json()
         self.assertEqual(len(history["days"][0]["completed_tasks"]), 1)
@@ -520,18 +525,24 @@ class AppTests(TestCase):
         self.assertEqual(local_day(self.prefs, datetime(2026, 3, 29, 1, 0, tzinfo=timezone.utc)),
                          date(2026, 3, 29))
 
-    def test_reopening_clears_completion_and_redo_uses_new_day(self):
+    def test_past_goals_require_explicit_carry_before_changing(self):
         self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"})
         tomorrow = NOW + timedelta(days=1)
-        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, tomorrow)
+        for action in ["toggle", "rename", "first"]:
+            self.assertEqual(self.post(f"/api/tasks/{self.task.id}/", {"action": action}, tomorrow).status_code, 409)
+        response = self.post("/api/tasks/carry/", {"task_id": self.task.id, "date": "2026-10-08"}, tomorrow)
+        self.assertEqual(response.status_code, 201, response.content)
+        copied = Task.objects.get(id=response.json()["id"])
+        self.assertFalse(copied.done)
+        self.assertIsNone(copied.completed_on)
+        self.post(f"/api/tasks/{copied.id}/", {"action": "toggle"}, tomorrow)
+        copied.refresh_from_db()
+        self.assertEqual(copied.completed_on, date(2026, 10, 8))
         self.task.refresh_from_db()
-        self.assertFalse(self.task.done)
-        self.assertIsNone(self.task.completed_on)
-        self.post(f"/api/tasks/{self.task.id}/", {"action": "toggle"}, tomorrow)
-        self.task.refresh_from_db()
-        self.assertEqual(self.task.completed_on, date(2026, 10, 8))
+        self.assertEqual(self.task.completed_on, date(2026, 10, 7))
 
     def test_undated_tasks_are_retained_and_can_be_attached_explicitly(self):
+        self.task.goal_date = None
         self.task.done = True
         self.task.save()
         self.assertIsNone(self.client.get("/api/state/").json()["tasks"][0]["completed_on"])
@@ -556,7 +567,7 @@ class AppTests(TestCase):
         self.assertEqual(self.post("/api/tasks/", {"title": "Next task"}).status_code, 201)
 
     def test_task_snapshots_survive_rename_archive_and_reorder(self):
-        second = Task.objects.create(user=self.user, title="Second", position=1)
+        second = Task.objects.create(goal_date=date(2026, 10, 7), user=self.user, title="Second", position=1)
         self.post(f"/api/tasks/{second.id}/", {"action": "first"})
         session = self.start()
         self.assertEqual(session.title, "Second")
@@ -565,7 +576,7 @@ class AppTests(TestCase):
         self.assertEqual(session.allocations.get().label, "Second")
 
     def test_cross_user_objects_are_inaccessible(self):
-        foreign_task = Task.objects.create(user=self.other, title="Private")
+        foreign_task = Task.objects.create(goal_date=date(2026, 10, 7), user=self.other, title="Private")
         foreign_block = self.block(user=self.other)
         self.assertEqual(
             self.post(f"/api/tasks/{foreign_task.id}/", {"action": "toggle"}).status_code, 404

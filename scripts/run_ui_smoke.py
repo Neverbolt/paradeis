@@ -39,7 +39,10 @@ def main():
         # available even when CI runs after the default workday has ended.
         fixture_timezone = f"Etc/GMT{datetime.now(timezone.utc).hour - 12:+d}"
         fixture_preferences = (
-            f"; from focus.models import Preferences; Preferences.objects.create(user=user, timezone={fixture_timezone!r})"
+            f"; from focus.models import Preferences, Task; prefs = Preferences.objects.create(user=user, timezone={fixture_timezone!r})"
+            "; from focus.services import local_day; from datetime import timedelta; previous = local_day(prefs) - timedelta(days=1)"
+            "; Task.objects.create(user=user, title='Finish the proposal', goal_date=previous)"
+            "; Task.objects.create(user=user, title='Review yesterday notes', goal_date=previous, done=True, completed_on=previous, position=1)"
         )
         subprocess.run(
             [

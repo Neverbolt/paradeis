@@ -15,10 +15,11 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from .models import Allocation, Block, BlockTemplate, LoginAttempt, Note, Session, Task
+from .models import Allocation, Block, BlockTemplate, DayPlan, LoginAttempt, Note, Session, Task
 from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_template
 from .services import (
     Conflict,
+    daily_tasks,
     block_bounds,
     calendar_day,
     check_room,
@@ -185,7 +186,7 @@ def service_worker(request):
     return response
 
 
-def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None):
+def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None, goals=None):
     sessions = (
         list(
             Session.objects.filter(user=user, date=day)
@@ -204,9 +205,13 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=
     if completed_tasks is None:
         completed_tasks = list(Task.objects.filter(user=user, done=True, completed_on=day)
                                .values("id", "title", "completed_on"))
+    if goals is None:
+        goals = list(Task.objects.filter(user=user, goal_date=day, archived=False)
+                     .values("id", "title", "done"))
     return {
         "date": day.isoformat(),
         "completed_tasks": completed_tasks,
+        "goals": goals,
         "sessions": [serialize_session(s, now) for s in sessions],
         "blocks": [serialize_block(b, prefs) for b in blocks],
         "plan": plan(day, prefs, blocks, sessions, now),
@@ -227,12 +232,21 @@ def state(request, data, prefs, now, active):
         .prefetch_related("allocations")
         .order_by("-ended_at")[:10]
     )
-    tasks = list(
-        Task.objects.filter(user=request.user, archived=False)
-        .filter(Q(done=False) | Q(completed_on=day) | Q(completed_on__isnull=True)).values(
-            "id", "title", "done", "position", "completed_on"
-        )
-    )
+    today = local_day(prefs, now)
+    tasks = list(daily_tasks(request.user, prefs, now).values(
+        "id", "title", "done", "position", "completed_on", "carried_from_id"
+    ))
+    # Keep legacy, undated completions accessible until explicitly dated.
+    tasks += list(Task.objects.filter(user=request.user, archived=False, done=True,
+                                     goal_date__isnull=True, completed_on__isnull=True)
+                  .values("id", "title", "done", "position", "completed_on", "carried_from_id"))
+    previous_day = today - timedelta(days=1)
+    day_plan = {"date": today.isoformat(),
+                "ready": DayPlan.objects.filter(user=request.user, date=today).exists(),
+                "previous_date": previous_day.isoformat(),
+                "previous_tasks": list(Task.objects.filter(user=request.user, goal_date=previous_day,
+                                                            archived=False).order_by("done", "position", "id")
+                                       .values("id", "title", "done"))}
     live_block = None
     for block in Block.objects.filter(user=request.user, date=calendar_day(prefs, now), deleted=False).exclude(kind="work"):
         start, end = block_bounds(block, prefs)
@@ -248,7 +262,7 @@ def state(request, data, prefs, now, active):
         .first()
     )
     work = work_at(request.user, prefs, now)
-    first_task = Task.objects.filter(user=request.user, done=False, archived=False).first()
+    first_task = daily_tasks(request.user, prefs, now).filter(done=False).first()
     waiting_break = pending_break(request.user, prefs, now)
     return JsonResponse(
         {
@@ -270,6 +284,7 @@ def state(request, data, prefs, now, active):
                 "long_every": prefs.long_every,
             },
             "tasks": tasks,
+            "day_plan": day_plan,
             "live_block": live_block,
             "next_seconds": next_seconds,
             "next_requested": prefs.next_focus_seconds or prefs.focus_minutes * 60,
@@ -305,6 +320,10 @@ def history(request, data, prefs, now, active):
     for task in (Task.objects.filter(user=request.user, done=True, completed_on__range=(start, end))
                  .values("id", "title", "completed_on")):
         completed_by_day.setdefault(task["completed_on"], []).append(task)
+    goals_by_day = {}
+    for goal in Task.objects.filter(user=request.user, goal_date__range=(start, end), archived=False).values(
+            "id", "title", "done", "goal_date"):
+        goals_by_day.setdefault(goal["goal_date"], []).append(goal)
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     note_rows = list(
         Note.objects.filter(user=request.user, date__range=(start.replace(day=1), end))
@@ -325,6 +344,7 @@ def history(request, data, prefs, now, active):
                     [s for s in sessions if s.date == day],
                     blocks_by_day.get(day, []),
                     completed_by_day.get(day, []),
+                    goals_by_day.get(day, []),
                 )
                 for day in days
             ],
@@ -337,15 +357,55 @@ def history(request, data, prefs, now, active):
     )
 
 
+def check_goal_day(data, prefs, now):
+    day = local_day(prefs, now)
+    if "date" in data and parse_day(data["date"]) != day:
+        raise Conflict("A new day has begun. Refresh to plan today.")
+    return day
+
+
+@api(["POST"])
+def day_plan_save(request, data, prefs, now, active):
+    day = check_goal_day(data, prefs, now)
+    # An explicit date prevents a stale planning dialog from starting another day.
+    if "date" not in data:
+        raise ValueError("Choose the day you are planning.")
+    DayPlan.objects.get_or_create(user=request.user, date=day)
+    return JsonResponse({"ok": True})
+
+
+@api(["POST"])
+def task_carry(request, data, prefs, now, active):
+    day = check_goal_day(data, prefs, now)
+    source = Task.objects.get(user=request.user, id=integer(data, "task_id", 1, 2**53 - 1),
+                              goal_date=day - timedelta(days=1), archived=False)
+    existing = Task.objects.filter(user=request.user, goal_date=day, carried_from=source).first()
+    if existing and not existing.archived:
+        return JsonResponse({"id": existing.id})
+    if daily_tasks(request.user, prefs, now).filter(done=False).count() >= 200:
+        raise ValueError("Complete or remove goals before adding more (200 pending goals maximum).")
+    last = daily_tasks(request.user, prefs, now).aggregate(last=Max("position"))["last"] or 0
+    if existing:
+        existing.archived, existing.position = False, last + 1
+        existing.save(update_fields=["archived", "position"])
+        task = existing
+    else:
+        task = Task.objects.create(user=request.user, goal_date=day, carried_from=source,
+                                   title=source.title, position=last + 1)
+    track_top_task(active, now)
+    return JsonResponse({"id": task.id}, status=201)
+
+
 @api(["POST"])
 def task_create(request, data, prefs, now, active):
     title = text(data, "title", 200)
     if not title:
         raise ValueError("Give your task a name.")
-    if Task.objects.filter(user=request.user, archived=False, done=False).count() >= 200:
+    check_goal_day(data, prefs, now)
+    if daily_tasks(request.user, prefs, now).filter(done=False).count() >= 200:
         raise ValueError("Complete or archive tasks before adding more (200 pending tasks maximum).")
-    last = Task.objects.filter(user=request.user).aggregate(last=Max("position"))["last"] or 0
-    task = Task.objects.create(user=request.user, title=title, position=last + 1)
+    last = daily_tasks(request.user, prefs, now).aggregate(last=Max("position"))["last"] or 0
+    task = Task.objects.create(user=request.user, title=title, position=last + 1, goal_date=local_day(prefs, now))
     track_top_task(active, now)
     return JsonResponse({"id": task.id}, status=201)
 
@@ -355,7 +415,7 @@ def task_reorder(request, data, prefs, now, active):
     ids = data.get("ids")
     if not isinstance(ids, list) or any(type(pk) is not int for pk in ids):
         raise ValueError("Choose a valid task order.")
-    tasks = list(Task.objects.filter(user=request.user, archived=False, done=False))
+    tasks = list(daily_tasks(request.user, prefs, now).filter(done=False))
     if len(ids) != len(tasks) or set(ids) != {task.id for task in tasks}:
         raise Conflict("The task list changed. Refresh and try again.")
     positions = {pk: position for position, pk in enumerate(ids)}
@@ -370,6 +430,11 @@ def task_reorder(request, data, prefs, now, active):
 def task_update(request, data, prefs, now, active, pk):
     task = Task.objects.get(id=pk, user=request.user)
     action = data.get("action")
+    legacy = task.goal_date is None and task.done and task.completed_on is None
+    if legacy and action == "toggle":
+        task.goal_date = local_day(prefs, now)
+    if action in ["rename", "toggle", "first"] and not legacy and task.goal_date != local_day(prefs, now):
+        raise Conflict("Bring this goal into today before changing it.")
     if action == "rename":
         task.title = text(data, "title", 200)
         if not task.title:
@@ -384,10 +449,12 @@ def task_update(request, data, prefs, now, active, pk):
         if day > local_day(prefs, now):
             raise ValueError("Completion dates cannot be in the future.")
         task.completed_on = day
+        if task.goal_date is None:
+            task.goal_date = day
     elif action == "archive":
         task.archived = True
     elif action == "first":
-        others = Task.objects.filter(user=request.user, archived=False).exclude(id=pk)
+        others = daily_tasks(request.user, prefs, now).exclude(id=pk)
         from django.db.models import F
 
         others.update(position=F("position") + 1)

@@ -1247,3 +1247,16 @@ dialog::backdrop {
 .calendar-day .timeline-end {grid-template-columns: 11px minmax(0, 1fr); gap: 4px; min-height: 32px;}
 
 .review-heading-actions {display: flex; align-items: center; gap: 10px;}
+
+.day-plan-dialog { width: 520px; }
+.day-plan-section { margin-top: 22px; }
+.day-plan-section h3 { font-weight: 600; }
+.day-plan-list { margin-top: 8px; }
+.day-plan-previous { border-top: 1px solid var(--line); padding-top: 18px; }
+.day-plan-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.day-plan-row + .day-plan-row { border-top: 1px solid var(--line); }
+.day-plan-row .goal-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.day-plan-row .goal-label small { display: block; color: var(--muted); font-size: 11px; }
+.day-plan-row button { flex-shrink: 0; }
+.day-plan-row .goal-done { color: var(--muted); }
+.day-plan-empty { padding: 6px 0 10px; }
