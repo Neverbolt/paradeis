@@ -262,6 +262,34 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False, topic=Non
     return session
 
 
+def record_focus(user, prefs, now, start, minutes, title):
+    """Record past focus explicitly, without starting a timer or adding a break."""
+    from .recurrence import materialize
+
+    end = start + timedelta(minutes=minutes)
+    if end > now:
+        raise ValueError("A completed pomo must end in the past.")
+    materialize(user, calendar_day(prefs, start), calendar_day(prefs, end), calendar_day(prefs, now))
+    check_room(user, prefs, start, end)
+    for other in Session.objects.filter(user=user, started_at__lt=end).exclude(status="cancelled"):
+        other_end = other.ended_at or (
+            now + timedelta(seconds=other.remaining_seconds)
+            if other.status == "paused" else other.deadline
+        )
+        if other_end > start:
+            raise Conflict("This pomo overlaps recorded time. Choose a different time range.")
+    seconds = minutes * 60
+    session = Session.objects.create(user=user, date=local_day(prefs, start), kind="focus",
+        title=title, started_at=start, resumed_at=start, deadline=end, ended_at=end,
+        planned_seconds=seconds, remaining_seconds=0, elapsed_seconds=seconds, status="completed")
+    Allocation.objects.create(session=session, label=title)
+    latest = Session.objects.filter(user=user).order_by("-started_at", "-id").first()
+    if latest.id == session.id:
+        prefs.auto_armed = False
+        prefs.save(update_fields=["auto_armed"])
+    return session
+
+
 def record_meeting(user, prefs, now, block_id):
     """Explicitly record a past reservation when its timer was not started."""
     block = Block.objects.get(user=user, pk=block_id, kind="meeting", deleted=False)

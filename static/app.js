@@ -871,6 +871,7 @@ async function timerActionResult(seconds) {
 }
 function openReview(s) {
   reviewing = s;
+  $("review-delete").hidden = s.kind !== "focus";
   reviewFocus = s.focus_score ?? null;
   $("review-focus").hidden = s.kind !== "focus";
   renderReviewFocus();
@@ -998,6 +999,44 @@ $("review-form").onsubmit = async (e) => {
 };
 $("review-overrun").onclick = () =>
   mutate("timer/", { action: "overrun", id: reviewing.id }, $("review-dialog"));
+$("review-delete").onclick = async () => {
+  if (!confirm("Delete this pomo and its sand/focus ratings?")) return;
+  if (await mutate(`sessions/${reviewing.id}/delete/`, {}, $("review-dialog")))
+    reviewing = null;
+};
+function openManualPomo() {
+  const start = now() - state.preferences.focus_minutes * 60000;
+  $("manual-pomo-task").value = "";
+  $("manual-pomo-date").value = selectedDay === state.today || selectedDay > localDate(now())
+    ? localDate(start) : selectedDay;
+  $("manual-pomo-start").value = clock(start);
+  $("manual-pomo-minutes").value = state.preferences.focus_minutes;
+  openDialog($("manual-pomo-dialog"));
+  $("manual-pomo-task").focus();
+}
+document.addEventListener("keydown", e => {
+  if (e.code !== "KeyP" || !e.ctrlKey || !e.altKey || !e.shiftKey || e.metaKey ||
+      e.repeat || e.isComposing || e.defaultPrevented || busy || !state ||
+      document.querySelector("dialog[open]") ||
+      e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  e.preventDefault();
+  openManualPomo();
+});
+$("manual-pomo-form").onsubmit = async e => {
+  e.preventDefault();
+  if (busy) return;
+  busy = true;
+  try {
+    const result = await api("sessions/", {title: $("manual-pomo-task").value,
+      date: $("manual-pomo-date").value, start: $("manual-pomo-start").value,
+      minutes: Number($("manual-pomo-minutes").value)});
+    $("manual-pomo-dialog").close();
+    selectedDay = result.session.date;
+    await showView(false);
+    openReview(result.session);
+  } catch (error) { showError(error, $("manual-pomo-dialog")); }
+  finally { busy = false; tick(); }
+};
 function openBlock(b = null) {
   editingBlock = b;
   const rounded = Math.ceil((now() + 1) / 300000) * 300000;

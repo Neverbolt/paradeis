@@ -1245,3 +1245,5 @@ dialog::backdrop {
 .timeline-end-label {display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 9px;}
 .timeline-end-label::before {content: ""; flex: 1; border-top: 1px solid var(--line);}
 .calendar-day .timeline-end {grid-template-columns: 11px minmax(0, 1fr); gap: 4px; min-height: 32px;}
+
+.review-heading-actions {display: flex; align-items: center; gap: 10px;}

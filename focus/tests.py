@@ -300,6 +300,91 @@ class AppTests(TestCase):
         self.assertEqual(self.post(f"/api/sessions/{session.id}/review/", review).status_code, 400)
         self.assertEqual(list(session.allocations.values_list("sand", flat=True)), [3, 1])
 
+    def test_delete_completed_pomo_removes_totals_review_and_break(self):
+        session = self.start()
+        self.finish(session)
+        self.post(f"/api/sessions/{session.id}/review/", {"focus_score": 3,
+            "allocations": [{"task_id": self.task.id, "sand": 4}]})
+        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 200)
+        snapshot = self.client.get("/api/state/").json()
+        self.assertEqual(snapshot["day"]["sessions"], [])
+        self.assertEqual(snapshot["day"]["summary"]["count"], 0)
+        self.assertEqual(snapshot["day"]["summary"]["seconds"], 0)
+        self.assertEqual(snapshot["day"]["summary"]["effort"], 0)
+        self.assertEqual(snapshot["pending"], [])
+        self.assertIsNone(snapshot["break_until"])
+        self.assertFalse(snapshot["can_auto_start"])
+        self.assertEqual(self.client.get('/api/history/?start=2026-10-07&end=2026-10-07').json()['days'][0]['sessions'], [])
+        session.refresh_from_db()
+        self.assertEqual(session.status, "cancelled")
+        self.assertEqual(session.pending_break_seconds, 0)
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.done)
+        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 200)
+
+    def test_delete_cannot_touch_running_foreign_or_meeting_sessions(self):
+        session = self.start()
+        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 409)
+        self.client.force_login(self.other)
+        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 404)
+        self.client.force_login(self.user)
+        self.finish(session)
+        session.refresh_from_db()
+        session.kind = "meeting"
+        session.save()
+        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 404)
+
+    def test_manual_pomo_records_elapsed_time_without_starting_a_timer(self):
+        self.prefs.auto_focus = self.prefs.auto_armed = True
+        self.prefs.save()
+        response = self.post('/api/sessions/', dict(title='Forgotten writing', date='2026-10-07', start='08:00', minutes=25))
+        self.assertEqual(response.status_code, 201, response.content)
+        value = response.json()['session']
+        self.assertEqual(value['status'], 'completed')
+        self.assertEqual(value['elapsed'], 1500)
+        self.assertIsNone(value['focus_score'])
+        self.assertFalse(value['reviewed'])
+        session = Session.objects.get(id=value['id'])
+        self.assertIsNone(session.break_until)
+        self.assertEqual(session.pending_break_seconds, 0)
+        self.assertEqual(session.allocations.get().label, 'Forgotten writing')
+        self.assertEqual(session.allocations.get().sand, 0)
+        snapshot = self.client.get('/api/state/').json()
+        self.assertIsNone(snapshot['active'])
+        self.assertFalse(snapshot['can_auto_start'])
+        self.assertEqual(snapshot['day']['summary']['seconds'], 1500)
+        self.assertEqual(snapshot['day']['summary']['effort'], 0)
+        self.assertEqual(self.post(f"/api/sessions/{session.id}/review/", {'focus_score': 2,
+            'allocations': [{'label': 'Forgotten writing', 'sand': 3}]}).status_code, 200)
+
+    def test_manual_pomo_validation_and_time_collisions(self):
+        payload = dict(title='Writing', date='2026-10-07', start='08:00', minutes=25)
+        for changes in [dict(title=''), dict(start='09:00'), dict(minutes=0), dict(minutes=721),
+                        dict(minutes=True), dict(minutes=2.5), dict(date='2026-10-08')]:
+            with self.subTest(changes=changes):
+                self.assertEqual(self.post('/api/sessions/', {**payload, **changes}).status_code, 400)
+        self.assertEqual(Session.objects.count(), 0)
+        self.assertEqual(self.post('/api/sessions/', payload).status_code, 201)
+        self.assertEqual(self.post('/api/sessions/', payload).status_code, 409)
+        self.block(start=time(8, 30), end=time(9))
+        self.assertEqual(self.post('/api/sessions/', {**payload, 'start': '08:35'}).status_code, 409)
+        work = self.block(kind='work', start=time(7), end=time(8))
+        self.assertEqual(self.post('/api/sessions/', {**payload, 'start': '07:00'}).status_code, 201)
+        self.assertEqual(Session.objects.filter(status='completed').count(), 2)
+
+    def test_manual_pomo_preserves_running_timer_and_day_rollover(self):
+        active = self.start()
+        self.assertEqual(self.post('/api/sessions/', dict(title='Earlier work', date='2026-10-07', start='08:00', minutes=25)).status_code, 201)
+        active.refresh_from_db()
+        self.assertEqual(active.status, 'running')
+        self.assertEqual(active.deadline, NOW + timedelta(minutes=25))
+        self.assertEqual(self.post('/api/sessions/', dict(title='Overlap', date='2026-10-07', start='09:01', minutes=5), NOW + timedelta(minutes=10)).status_code, 409)
+        self.prefs.day_rollover = time(4)
+        self.prefs.save()
+        response = self.post('/api/sessions/', dict(title='Late work', date='2026-10-07', start='01:00', minutes=25))
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['session']['date'], '2026-10-06')
+
     def test_focus_rating_is_per_session_and_preserves_unrated_zero_and_scores(self):
         session = self.start()
         self.finish(session)
