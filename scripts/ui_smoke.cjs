@@ -138,6 +138,46 @@ async function checkFocusRatingsUI(w) {
   $("review-dialog").close();
 }
 
+async function checkManualPomoUI(w) {
+  const $ = id => w.document.getElementById(id), today = (await w.api('state/')).today;
+  const chord = extra => new w.KeyboardEvent('keydown', {code: 'KeyP', ctrlKey: true,
+    altKey: true, shiftKey: true, bubbles: true, cancelable: true, ...extra});
+  $('task-title').dispatchEvent(chord());
+  assert(!$('manual-pomo-dialog').open, 'Typing fields do not trigger manual entry');
+  w.document.dispatchEvent(chord({repeat: true}));
+  assert(!$('manual-pomo-dialog').open);
+  w.document.dispatchEvent(chord());
+  assert($('manual-pomo-dialog').open);
+  const day = w.shiftDay(today, -1);
+  $('manual-pomo-task').value = 'Forgotten pomo';
+  $('manual-pomo-date').value = day;
+  $('manual-pomo-start').value = '03:00';
+  $('manual-pomo-minutes').value = '25';
+  $('manual-pomo-form').requestSubmit();
+  await waitFor(() => !$('manual-pomo-dialog').open && $('review-dialog').open && w.eval('!busy'), 'record past pomo');
+  assert.equal($('timeline-date').textContent, w.dateLabel(day, {weekday: 'short', month: 'short', day: 'numeric'}));
+  $('allocations').querySelector('.sand-control button:nth-child(3)').click();
+  $('focus-control').children[1].click();
+  $('review-form').requestSubmit();
+  await waitFor(() => !$('review-dialog').open && w.eval('!busy'), 'rate manual pomo');
+  const saved = (await w.api(`state/?date=${day}`)).day.sessions.find(s => s.title === 'Forgotten pomo');
+  assert.equal(saved.elapsed, 1500);
+  assert.equal(saved.effort, 3);
+  assert.equal(saved.focus_score, 2);
+  w.openReview(saved);
+  const confirm = w.confirm;
+  w.confirm = () => false;
+  $('review-delete').click();
+  assert($('review-dialog').open, 'Cancelling deletion keeps the review');
+  w.confirm = () => true;
+  $('review-delete').click();
+  await waitFor(() => !$('review-dialog').open && w.eval('!busy'), 'delete manual pomo');
+  w.confirm = confirm;
+  assert(!(await w.api(`state/?date=${day}`)).day.sessions.some(s => s.id === saved.id));
+  assert(!$('timeline').textContent.includes('Forgotten pomo'));
+  await w.changeDay(today);
+}
+
 async function checkSchedulingUI(w) {
   checkWorkWrappingUI(w);
   const pattern = (id, start, end) => ({id, start, end});
@@ -171,6 +211,7 @@ async function checkSchedulingUI(w) {
   await w.api("timer/", {action: "skip_break"});
   await w.api("timer/", {action: "configure_auto", auto_focus: false, auto_break: true});
   await checkFocusRatingsUI(w);
+  await checkManualPomoUI(w);
   await w.api("timer/", {action: "skip_break"});
   await w.refresh();
   const workStart = Math.floor(Date.parse((await w.api("state/")).now) / 60000) * 60000;

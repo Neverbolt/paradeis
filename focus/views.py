@@ -29,6 +29,7 @@ from .services import (
     plan,
     preferences,
     record_meeting,
+    record_focus,
     resize_session,
     serialize_block,
     serialize_session,
@@ -520,6 +521,29 @@ def timer(request, data, prefs, now, active):
     else:
         raise ValueError("Unknown timer action.")
     active.save()
+    return JsonResponse({"ok": True})
+
+
+@api(["POST"])
+def session_create(request, data, prefs, now, active):
+    title = text(data, "title", 200)
+    if not title:
+        raise ValueError("Enter the task worked on.")
+    start = instant(parse_day(data["date"]), clock(data["start"]), prefs)
+    minutes = integer(data, "minutes", 1, 720)
+    session = record_focus(request.user, prefs, now, start, minutes, title)
+    return JsonResponse({"session": serialize_session(session, now)}, status=201)
+
+
+@api(["POST"])
+def session_delete(request, data, prefs, now, active, pk):
+    session = Session.objects.get(user=request.user, pk=pk, kind="focus")
+    if session.status not in ["completed", "cancelled"]:
+        raise Conflict("Finish or discard the running timer first.")
+    session.status = "cancelled"
+    session.break_until = None
+    session.pending_break_seconds = 0
+    session.save(update_fields=["status", "break_until", "pending_break_seconds"])
     return JsonResponse({"ok": True})
 
 
