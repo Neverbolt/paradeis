@@ -60,6 +60,35 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector('.current-time');
     assert.equal(await page.locator('#day-plan-dialog[open]').count(), 0);
     await page.setViewportSize({width: 1280, height: 800});
+    const hoursDay = await page.evaluate(() => shiftDay(state.today, 1));
+    await page.locator('#day-next').click();
+    await waitFor(day => state.day.date === day, hoursDay);
+    await page.locator('#timeline .timeline-start').click();
+    assert(await page.locator('#day-hours-start').evaluate(el => el === document.activeElement));
+    await page.locator('#day-hours-start').fill('10:00');
+    await page.locator('#day-hours-end').fill('11:00');
+    await page.locator('#day-hours-end').press('Enter');
+    await waitFor(() => !busy && !document.querySelector('#day-hours-dialog').open);
+    assert.equal(await page.locator('#timeline .timeline-start .timeline-time').textContent(), '10:00');
+    assert.equal(await page.locator('#timeline .timeline-end .timeline-time').textContent(), '11:00');
+    await page.reload();
+    await page.waitForSelector("#timeline .timeline-start");
+    await page.evaluate(day => changeDay(day), hoursDay);
+    await waitFor(day => !busy && state.day.date === day, hoursDay);
+    assert.equal(await page.locator('#timeline .timeline-end .timeline-time').textContent(), '11:00');
+    await page.screenshot({path: 'test-results/day-hours-1280.png'});
+    await page.setViewportSize({width: 390, height: 844});
+    await page.locator('#timeline .timeline-end').click();
+    assert(await page.locator('#day-hours-end').evaluate(el => el === document.activeElement));
+    await page.screenshot({path: 'test-results/day-hours-editor-390.png'});
+    await page.locator('#day-hours-reset').click();
+    await waitFor(() => !busy && !document.querySelector('#day-hours-dialog').open);
+    assert.equal(await page.evaluate(() => state.day.workday.customized), false);
+    await page.locator('#go-today').click();
+    await waitFor(() => !busy && selectedDay === state.today);
+    await waitFor(() => state.day.date === state.today);
+    assert.equal(await page.evaluate(() => state.day.workday.customized), false);
+    await page.setViewportSize({width: 1280, height: 800});
     await page.bringToFront();
     await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
     // Headless Chromium keeps page focus emulated across tabs; exercise the
@@ -577,10 +606,9 @@ fs.mkdirSync("test-results", { recursive: true });
       }
       await page.setViewportSize({width: 1280, height: 800});
       assert(await page.evaluate(() => {
-        const times = [...entries(state.day), ...state.day.blocks.filter(b => b.kind === 'work')].map(item => Date.parse(item.end));
         const marker = document.querySelector('#timeline .timeline-end .timeline-time');
         const rowTime = document.querySelector('#timeline > .timeline-row .timeline-time');
-        return marker.textContent === clock(Math.max(...times)) &&
+        return marker.textContent === state.day.workday.end_time &&
           Math.abs(marker.getBoundingClientRect().right - rowTime.getBoundingClientRect().right) < 1 &&
           state.day.plan.at(-1)?.kind !== 'break';
       }), 'Day end aligns with the time column and has no trailing planned break');

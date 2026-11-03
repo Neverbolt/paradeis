@@ -96,6 +96,48 @@ function checkWorkWrappingUI(w) {
     assert.equal(container.querySelectorAll('.timeline-end').length, 1);
     assert.equal(container.querySelector('.timeline-end .timeline-time').textContent, w.clock(day.blocks[2].end));
   }
+  const wrapped = w.document.createElement('div');
+  wrapped.id = 'timeline';
+  const bounds = {start: time(-20), end: time(20), start_time: '09:00', end_time: '17:00'};
+  w.renderTimeline(wrapped, {...day, workday: bounds});
+  for (const selector of ['.timeline-start', '.timeline-end'])
+    assert.equal(wrapped.querySelector(selector).closest('.work-reservation').dataset.workId, '301');
+  const orderedTimes = [...wrapped.querySelector('.work-reservation-items').children]
+    .map(row => Date.parse(row.dataset.start)).filter(Number.isFinite);
+  assert.deepEqual(orderedTimes, [...orderedTimes].sort((a,b) => a-b));
+
+}
+
+async function checkDayHoursUI(w) {
+  const $ = id => w.document.getElementById(id);
+  const today = w.eval("state.today"), tomorrow = w.shiftDay(today, 1);
+  await w.changeDay(tomorrow);
+  assert.equal($("timeline").querySelectorAll(".timeline-boundary").length, 2);
+  $("timeline").querySelector(".timeline-start").click();
+  assert($("day-hours-dialog").open);
+  assert.equal(w.document.activeElement, $("day-hours-start"));
+  assert($("day-hours-reset").hidden);
+  $("day-hours-start").value = "10:00";
+  $("day-hours-end").value = "11:00";
+  $("day-hours-form").requestSubmit();
+  await waitFor(() => !$("day-hours-dialog").open && !w.eval("busy"), "save day-specific hours");
+  assert.equal($("timeline").querySelector(".timeline-start .timeline-time").textContent, "10:00");
+  assert.equal($("timeline").querySelector(".timeline-end .timeline-time").textContent, "11:00");
+  await w.refresh();
+  assert.equal(w.eval("state.day.workday.customized"), true);
+  assert.equal((await w.api("state/")).day.workday.customized, false, "Today keeps its default hours");
+  $("timeline").querySelector(".timeline-end").click();
+  assert.equal(w.document.activeElement, $("day-hours-end"));
+  $("day-hours-start").value = "12:00";
+  $("day-hours-form").requestSubmit();
+  await waitFor(() => !$("day-hours-dialog").querySelector(".dialog-error").hidden && !w.eval("busy"), "invalid range stays editable");
+  assert($("day-hours-dialog").open);
+  assert.equal((await w.api(`state/?date=${tomorrow}`)).day.workday.start_time, "10:00");
+  $("day-hours-reset").click();
+  await waitFor(() => !$("day-hours-dialog").open && !w.eval("busy"), "restore default hours");
+  assert.equal(w.eval("state.day.workday.customized"), false);
+  assert.equal($("timeline").querySelector(".timeline-start .timeline-time").textContent, w.eval("state.preferences.day_start"));
+  await w.changeDay(today);
 }
 
 async function checkFocusRatingsUI(w) {
@@ -421,6 +463,7 @@ async function checkSchedulingUI(w) {
   await waitFor(() => !$("day-plan-dialog").open && !w.eval("busy"), "start day");
   await w.refresh();
   assert(!$("day-plan-dialog").open, "Planning completion persists");
+  await checkDayHoursUI(w);
   if (process.env.PARADEIS_SCHEDULING_ONLY === "1") {
     await checkSchedulingUI(w);
     assert.deepEqual(errors, [], "No JavaScript errors");

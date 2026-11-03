@@ -3,6 +3,7 @@ import json
 from datetime import date, time, timedelta
 from functools import wraps
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from django.conf import settings
@@ -15,11 +16,13 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from .models import Allocation, Block, BlockTemplate, DayPlan, LoginAttempt, Note, Session, Task
+from .models import Allocation, Block, BlockTemplate, DayHours, DayPlan, LoginAttempt, Note, Session, Task
 from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_template
 from .services import (
     Conflict,
     daily_tasks,
+    get_day_hours,
+    workday_bounds,
     block_bounds,
     calendar_day,
     check_room,
@@ -186,7 +189,7 @@ def service_worker(request):
     return response
 
 
-def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None, goals=None):
+def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None, goals=None, hours=None):
     sessions = (
         list(
             Session.objects.filter(user=user, date=day)
@@ -208,13 +211,18 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=
     if goals is None:
         goals = list(Task.objects.filter(user=user, goal_date=day, archived=False)
                      .values("id", "title", "done"))
+    hours = hours if hours is not None else get_day_hours(prefs, day)
+    work_start, work_end = workday_bounds(day, prefs, hours)
     return {
         "date": day.isoformat(),
+        "workday": {"start_time": str(hours.start)[:5], "end_time": str(hours.end)[:5],
+                    "start": work_start.isoformat(), "end": work_end.isoformat(),
+                    "customized": hours.pk is not None},
         "completed_tasks": completed_tasks,
         "goals": goals,
         "sessions": [serialize_session(s, now) for s in sessions],
         "blocks": [serialize_block(b, prefs) for b in blocks],
-        "plan": plan(day, prefs, blocks, sessions, now),
+        "plan": plan(day, prefs, blocks, sessions, now, hours=hours),
         "summary": summary(sessions),
     }
 
@@ -324,6 +332,8 @@ def history(request, data, prefs, now, active):
     for goal in Task.objects.filter(user=request.user, goal_date__range=(start, end), archived=False).values(
             "id", "title", "done", "goal_date"):
         goals_by_day.setdefault(goal["goal_date"], []).append(goal)
+    default_hours = SimpleNamespace(start=prefs.day_start, end=prefs.day_end, pk=None)
+    hours_by_day = {h.date: h for h in DayHours.objects.filter(user=request.user, date__range=(start, end))}
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     note_rows = list(
         Note.objects.filter(user=request.user, date__range=(start.replace(day=1), end))
@@ -345,6 +355,7 @@ def history(request, data, prefs, now, active):
                     blocks_by_day.get(day, []),
                     completed_by_day.get(day, []),
                     goals_by_day.get(day, []),
+                    hours_by_day.get(day, default_hours),
                 )
                 for day in days
             ],
@@ -355,6 +366,20 @@ def history(request, data, prefs, now, active):
             "next": (end + timedelta(days=1)).isoformat(),
         }
     )
+
+
+@api(["POST"])
+def day_hours_save(request, data, prefs, now, active):
+    day = parse_day(data["date"])
+    if data.get("reset") is True:
+        DayHours.objects.filter(user=request.user, date=day).delete()
+    else:
+        start, end = clock(data["start"]), clock(data["end"])
+        if start >= end:
+            raise ValueError("Day end must be after its start.")
+        workday_bounds(day, prefs, SimpleNamespace(start=start, end=end))
+        DayHours.objects.update_or_create(user=request.user, date=day, defaults={"start": start, "end": end})
+    return JsonResponse({"ok": True})
 
 
 def check_goal_day(data, prefs, now):

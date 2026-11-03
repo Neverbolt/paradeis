@@ -588,6 +588,37 @@ function timelineCard(item) {
   card.append(meta);
   return card;
 }
+function openDayHours(day, field) {
+  const dialog = $("day-hours-dialog");
+  dialog.dataset.date = day.date;
+  $("day-hours-date").textContent = dateLabel(day.date, {weekday: "long", month: "short", day: "numeric", year: "numeric"});
+  $("day-hours-start").value = day.workday.start_time;
+  $("day-hours-end").value = day.workday.end_time;
+  $("day-hours-reset").hidden = !day.workday.customized;
+  openDialog(dialog);
+  $(`day-hours-${field}`).focus();
+}
+$("day-hours-form").onsubmit = e => {
+  e.preventDefault();
+  const dialog = $("day-hours-dialog");
+  mutate("day-hours/", {date: dialog.dataset.date, start: $("day-hours-start").value,
+    end: $("day-hours-end").value}, dialog);
+};
+$("day-hours-reset").onclick = () => {
+  const dialog = $("day-hours-dialog");
+  mutate("day-hours/", {date: dialog.dataset.date, reset: true}, dialog);
+};
+function dayBoundary(day, field) {
+  const label = field === "start" ? "Start" : "End";
+  const marker = button("", `timeline-boundary timeline-${field}`, () => openDayHours(day, field),
+    `Edit day ${field} time, ${day.workday[`${field}_time`]}`);
+  marker.title = `Edit day ${field}`;
+  marker.dataset.start = day.workday[field];
+  marker.append(el("span", "timeline-time", day.workday[`${field}_time`]),
+    el("span", "timeline-end-label", label));
+  return marker;
+}
+
 function renderTimeline(container, day) {
   const previousScroll = container.scrollTop;
   container.replaceChildren();
@@ -653,6 +684,7 @@ function renderTimeline(container, day) {
   if (day.date === state.today) {
     const marker = el("div", "now-marker", `Now · ${clock(now())}`);
     marker.setAttribute("aria-label", `Current time ${clock(now())}`);
+    marker.dataset.start = new Date(now()).toISOString();
     const work = workAt(now());
     const body = work && groups.get(work.id);
     const currentRow = rows.get(current);
@@ -665,10 +697,21 @@ function renderTimeline(container, day) {
       units.splice(units.indexOf(unit), 0, {start: unit.start, node: marker});
     } else units.push({start: now(), node: marker});
   }
-  units.sort((a, b) => a.start - b.start);
+  const editableHours = container.id === "timeline" && day.workday;
+  if (editableHours) {
+    for (const field of ["start", "end"]) {
+      const marker = dayBoundary(day, field), time = Date.parse(day.workday[field]);
+      const work = workAt(time), body = work && groups.get(work.id);
+      if (body) body.insertBefore(marker, [...body.children].find(row => Date.parse(row.dataset.start) >= time) || null);
+      else units.push({start: time, priority: -1, node: marker});
+    }
+  }
+  if (!all.length && !works.length && editableHours)
+    units.push({start: Date.parse(day.workday.start), priority: 1, node: el("p", "timeline-empty", "No sessions")});
+  units.sort((a, b) => a.start - b.start || (a.priority || 0) - (b.priority || 0));
   container.append(...units.map(unit => unit.node));
-  if (!all.length && !works.length) container.append(el("p", "timeline-empty", "No sessions"));
-  if (all.length || works.length) {
+  if (!all.length && !works.length && !editableHours) container.append(el("p", "timeline-empty", "No sessions"));
+  if (!editableHours && (all.length || works.length)) {
     const end = Math.max(...[...all, ...works].map(item => Date.parse(item.end)));
     const marker = el("div", "timeline-end");
     marker.setAttribute("aria-label", `Day ends at ${clock(end)}`);

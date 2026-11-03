@@ -1240,8 +1240,8 @@ dialog::backdrop {
 .focus-choice {display: flex; align-items: flex-end; justify-content: center; width: 27px; height: 30px; padding: 0 0 6px; color: #c6cfbd; border-radius: 5px;}
 .focus-choice[aria-pressed="true"] {color: var(--green);}
 .focus-choice:hover {background: #edf1e6;}
-.timeline-end {display: grid; grid-template-columns: 37px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 4px; padding: 4px 0 7px; flex-shrink: 0;}
-.timeline-end .timeline-time {padding-top: 0; color: var(--muted);}
+.timeline-end, .timeline-boundary {display: grid; grid-template-columns: 37px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 4px; padding: 4px 0 7px; flex-shrink: 0;}
+.timeline-end .timeline-time, .timeline-boundary .timeline-time {padding-top: 0; color: var(--muted);}
 .timeline-end-label {display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 9px;}
 .timeline-end-label::before {content: ""; flex: 1; border-top: 1px solid var(--line);}
 .calendar-day .timeline-end {grid-template-columns: 11px minmax(0, 1fr); gap: 4px; min-height: 32px;}
@@ -1260,3 +1260,9 @@ dialog::backdrop {
 .day-plan-row button { flex-shrink: 0; }
 .day-plan-row .goal-done { color: var(--muted); }
 .day-plan-empty { padding: 6px 0 10px; }
+
+.timeline-boundary {width: 100%; min-height: 30px; text-align: left; border-radius: 4px;}
+.timeline-boundary .timeline-end-label {font-size: 10px;}
+.timeline-boundary .timeline-end-label::after {content: "✎"; font-size: 11px; opacity: .5;}
+.timeline-boundary:hover {background: var(--sage);}
+.timeline-boundary:hover .timeline-end-label, .timeline-boundary:focus-visible .timeline-end-label {color: var(--green);}

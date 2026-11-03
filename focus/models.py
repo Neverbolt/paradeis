@@ -85,6 +85,19 @@ class DayPlan(models.Model):
         constraints = [models.UniqueConstraint(fields=["user", "date"], name="one_day_plan")]
 
 
+class DayHours(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    date = models.DateField()
+    start = models.TimeField()
+    end = models.TimeField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "date"], name="one_day_hours"),
+            models.CheckConstraint(condition=Q(end__gt=models.F("start")), name="day_hours_positive_length"),
+        ]
+
+
 class Block(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     date = models.DateField()
