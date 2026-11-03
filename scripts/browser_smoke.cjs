@@ -17,7 +17,7 @@ fs.mkdirSync("test-results", { recursive: true });
       if (await page.evaluate(predicate, arg)) return;
       await new Promise(resolve => setTimeout(resolve, 25));
     }
-    throw new Error("Timed out waiting for browser state");
+    throw new Error("Timed out waiting for browser state: " + await page.evaluate(() => JSON.stringify({companion: document.querySelector("#companion-help")?.textContent, permission: Notification.permission, subscribed: window.companionSubscribeCalled, error: document.querySelector("#error")?.textContent})));
   }
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -90,19 +90,24 @@ fs.mkdirSync("test-results", { recursive: true });
     assert.equal(await page.evaluate(() => state.day.workday.customized), false);
     await page.setViewportSize({width: 1280, height: 800});
     await context.grantPermissions(['notifications']);
+    assert.equal(await page.evaluate(() => Notification.permission), 'granted');
     await page.evaluate(async () => {
       const config = await api('push/');
-      window.realCompanionWorker = worker;
+      const originalGet = PushManager.prototype.getSubscription;
+      const originalSubscribe = PushManager.prototype.subscribe;
       let subscription = null;
-      worker = Promise.resolve({pushManager: {
-        getSubscription: async () => subscription,
-        subscribe: async () => {
-          subscription = {toJSON: () => ({endpoint: 'https://fcm.googleapis.com/wp/browser-companion',
-            keys: {p256dh: config.public_key, auth: 'AAAAAAAAAAAAAAAAAAAAAA'}}),
-            unsubscribe: async () => {subscription = null; return true;}};
-          return subscription;
-        },
-      }});
+      PushManager.prototype.getSubscription = async () => subscription;
+      PushManager.prototype.subscribe = async () => {
+        window.companionSubscribeCalled = true;
+        subscription = {toJSON: () => ({endpoint: 'https://fcm.googleapis.com/wp/browser-companion',
+          keys: {p256dh: config.public_key, auth: 'AAAAAAAAAAAAAAAAAAAAAA'}}),
+          unsubscribe: async () => {subscription = null; return true;}};
+        return subscription;
+      };
+      window.restoreCompanionPush = () => {
+        PushManager.prototype.getSubscription = originalGet;
+        PushManager.prototype.subscribe = originalSubscribe;
+      };
     });
     await page.locator('#settings-open').click();
     await waitFor(() => !document.querySelector('#companion-toggle').disabled);
@@ -120,7 +125,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await waitFor(() => document.querySelector('#companion-status').textContent === 'off' && !document.querySelector('#companion-toggle').disabled);
     assert.equal(await page.evaluate(async () => (await api('push/')).enabled), false);
     await page.getByRole('button', {name: 'Close settings', exact: true}).click();
-    await page.evaluate(() => {worker = window.realCompanionWorker;});
+    await page.evaluate(() => window.restoreCompanionPush());
     await context.clearPermissions();
     await page.setViewportSize({width: 1280, height: 800});
     await page.bringToFront();
