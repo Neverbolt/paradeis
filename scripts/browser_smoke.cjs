@@ -89,10 +89,10 @@ fs.mkdirSync("test-results", { recursive: true });
     await waitFor(() => state.day.date === state.today);
     assert.equal(await page.evaluate(() => state.day.workday.customized), false);
     await page.setViewportSize({width: 1280, height: 800});
-    await context.grantPermissions(['notifications']);
-    assert.equal(await page.evaluate(() => Notification.permission), 'granted');
     await page.evaluate(async () => {
       const config = await api('push/');
+      const permission = Object.getOwnPropertyDescriptor(Notification, 'permission');
+      Object.defineProperty(Notification, 'permission', {configurable: true, get: () => 'granted'});
       const originalGet = PushManager.prototype.getSubscription;
       const originalSubscribe = PushManager.prototype.subscribe;
       let subscription = null;
@@ -107,6 +107,7 @@ fs.mkdirSync("test-results", { recursive: true });
       window.restoreCompanionPush = () => {
         PushManager.prototype.getSubscription = originalGet;
         PushManager.prototype.subscribe = originalSubscribe;
+        Object.defineProperty(Notification, 'permission', permission);
       };
     });
     await page.locator('#settings-open').click();
@@ -126,7 +127,6 @@ fs.mkdirSync("test-results", { recursive: true });
     assert.equal(await page.evaluate(async () => (await api('push/')).enabled), false);
     await page.getByRole('button', {name: 'Close settings', exact: true}).click();
     await page.evaluate(() => window.restoreCompanionPush());
-    await context.clearPermissions();
     await page.setViewportSize({width: 1280, height: 800});
     await page.bringToFront();
     await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
