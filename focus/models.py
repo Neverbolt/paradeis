@@ -3,6 +3,7 @@ from datetime import time
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 
 class Preferences(models.Model):
@@ -155,6 +156,7 @@ class Session(models.Model):
     reflection = models.TextField(blank=True, max_length=2000)
     reviewed = models.BooleanField(default=False)
     pending_break_seconds = models.PositiveIntegerField(default=0)
+    notify_live = models.BooleanField(default=True)
     topic_mode = models.CharField(max_length=8, default="queue")
     work_topic = models.CharField(max_length=200, blank=True)
     selected_task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL,
@@ -230,3 +232,41 @@ class TaskFocusSpan(models.Model):
             models.UniqueConstraint(fields=["session"], condition=Q(ended_at__isnull=True),
                                     name="one_open_task_span"),
         ]
+
+
+class PushIdentity(models.Model):
+    # One durable application-server key pair, shared by the web and push worker.
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    private_key = models.TextField()
+    public_key = models.CharField(max_length=100)
+    subject = models.URLField(max_length=255)
+    worker_seen_at = models.DateTimeField(null=True)
+
+
+class PushSubscription(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    endpoint = models.URLField(max_length=4096, unique=True)
+    p256dh = models.CharField(max_length=100)
+    auth = models.CharField(max_length=32)
+    label = models.CharField(max_length=80, default="Companion device")
+    created_at = models.DateTimeField(default=timezone.now)
+    last_test_at = models.DateTimeField(null=True)
+
+
+class PushDelivery(models.Model):
+    subscription = models.ForeignKey(PushSubscription, on_delete=models.CASCADE)
+    session = models.ForeignKey(Session, null=True, on_delete=models.CASCADE)
+    key = models.CharField(max_length=150)
+    kind = models.CharField(max_length=8)
+    event_at = models.DateTimeField()
+    title = models.CharField(max_length=80)
+    body = models.CharField(max_length=250)
+    next_attempt_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    attempts = models.PositiveSmallIntegerField(default=0)
+    finished_at = models.DateTimeField(null=True)
+    outcome = models.CharField(max_length=12, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["subscription", "key"], name="one_device_push_event")]
+        indexes = [models.Index(fields=["finished_at", "next_attempt_at"])]

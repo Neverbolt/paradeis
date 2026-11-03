@@ -23,7 +23,7 @@ def main():
     request.user = AnonymousUser()
     shell = render_to_string("focus/app.html", request=request)
     assert 'class="sidebar"' in shell
-    for asset in ("app.css", "app.js", "icon.svg", "sw.js"):
+    for asset in ("app.css", "app.js", "icon.svg", "sw.js", "manifest.json", "app-icon-192.png", "app-icon-512.png"):
         url = staticfiles_storage.url(asset)
         response = client.get(url, secure=True)
         assert response.status_code == 200, (

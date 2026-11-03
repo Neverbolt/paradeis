@@ -19,6 +19,7 @@ urlpatterns = [
     ),
     path("health/", views.health),
     path("sw.js", views.service_worker),
+    path("api/push/", views.companion_push),
     path("api/state/", views.state),
     path("api/history/", views.history),
     path("api/day-hours/", views.day_hours_save),

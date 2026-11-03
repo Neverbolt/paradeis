@@ -296,7 +296,7 @@ def record_focus(user, prefs, now, start, minutes, title):
     seconds = minutes * 60
     session = Session.objects.create(user=user, date=local_day(prefs, start), kind="focus",
         title=title, started_at=start, resumed_at=start, deadline=end, ended_at=end,
-        planned_seconds=seconds, remaining_seconds=0, elapsed_seconds=seconds, status="completed")
+        planned_seconds=seconds, remaining_seconds=0, elapsed_seconds=seconds, status="completed", notify_live=False)
     Allocation.objects.create(session=session, label=title)
     latest = Session.objects.filter(user=user).order_by("-started_at", "-id").first()
     if latest.id == session.id:
@@ -339,6 +339,7 @@ def record_meeting(user, prefs, now, block_id):
         remaining_seconds=0,
         elapsed_seconds=seconds,
         status="completed",
+        notify_live=False,
     )
     count = Session.objects.filter(user=user, date=session.date, status="completed").count()
     minutes = prefs.long_break if count % prefs.long_every == 0 else prefs.short_break

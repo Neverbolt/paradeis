@@ -16,7 +16,8 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from .models import Allocation, Block, BlockTemplate, DayHours, DayPlan, LoginAttempt, Note, Session, Task
+from .models import Allocation, Block, BlockTemplate, DayHours, DayPlan, LoginAttempt, Note, PushSubscription, Session, Task
+from . import push
 from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_template
 from .services import (
     Conflict,
@@ -366,6 +367,50 @@ def history(request, data, prefs, now, active):
             "next": (end + timedelta(days=1)).isoformat(),
         }
     )
+
+
+@api(["GET", "POST"])
+def companion_push(request, data, prefs, now, active):
+    key = push.identity(request.build_absolute_uri("/").replace("http://", "https://", 1))
+    subscription = push.current_subscription(request)
+    if request.method == "GET":
+        return JsonResponse({"public_key": key.public_key, "enabled": subscription is not None,
+            "devices": PushSubscription.objects.filter(user=request.user).count(),
+            "worker_online": bool(key.worker_seen_at and now - key.worker_seen_at < timedelta(seconds=45))})
+    action = data.get("action")
+    if action == "subscribe":
+        endpoint, keys = push.subscription_keys(data.get("subscription"))
+        existing = PushSubscription.objects.filter(endpoint=endpoint).first()
+        if existing and existing.user_id != request.user.id:
+            raise Conflict("This browser is connected to another account. Sign out of that account first.")
+        if not existing and PushSubscription.objects.filter(user=request.user).count() >= 10:
+            raise ValueError("At most 10 companion devices can be connected to an account.")
+        label = text(data, "label", 80, "Companion device") or "Companion device"
+        connected, _ = PushSubscription.objects.update_or_create(endpoint=endpoint,
+            defaults={"user": request.user, "label": label, **keys},
+            create_defaults={"user": request.user, "label": label, "created_at": now, **keys})
+        if subscription and subscription.id != connected.id:
+            subscription.delete()
+        response = JsonResponse({"ok": True})
+        response.set_signed_cookie(push.COOKIE, str(connected.id), salt="companion", max_age=60*60*24*365,
+                                   secure=not settings.DEBUG, httponly=True, samesite="Lax")
+        return response
+    if action == "unsubscribe":
+        if subscription:
+            subscription.delete()
+        response = JsonResponse({"ok": True})
+        response.delete_cookie(push.COOKIE, samesite="Lax")
+        return response
+    if action == "test":
+        if subscription is None:
+            raise ValueError("Connect this device before sending a test.")
+        if subscription.last_test_at and now - subscription.last_test_at < timedelta(seconds=15):
+            raise ValueError("Wait a few seconds before sending another test.")
+        push.queue_test(subscription, now)
+        subscription.last_test_at = now
+        subscription.save(update_fields=["last_test_at"])
+        return JsonResponse({"ok": True})
+    raise ValueError("Unknown companion notification action.")
 
 
 @api(["POST"])

@@ -6,6 +6,9 @@
   <meta name="theme-color" content="#f7f5ef">
   <meta name="description" content="Track focus, time, tasks, and effort.">
   <title>{% block title %}Paradeis{% endblock %}</title>
+  <link rel="manifest" href="{% static 'manifest.json' %}">
+  <link rel="apple-touch-icon" href="{% static 'app-icon-192.png' %}">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <link rel="icon" href="{% static 'icon.svg' %}" type="image/svg+xml">
   <link rel="stylesheet" href="{% static 'app.css' %}">
   {% block head %}{% endblock %}
