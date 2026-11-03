@@ -21,6 +21,7 @@ urlpatterns = [
     path("sw.js", views.service_worker),
     path("api/state/", views.state),
     path("api/history/", views.history),
+    path("api/day-hours/", views.day_hours_save),
     path("api/day-plan/", views.day_plan_save),
     path("api/tasks/carry/", views.task_carry),
     path("api/tasks/", views.task_create),

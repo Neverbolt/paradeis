@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from django.utils import timezone
 
-from .models import Allocation, Block, DayPlan, Preferences, Session, Task, TaskFocusSpan
+from .models import Allocation, Block, DayHours, DayPlan, Preferences, Session, Task, TaskFocusSpan
 
 
 class Conflict(ValueError):
@@ -50,6 +50,17 @@ def instant(day, clock, prefs):
     if value.utcoffset() != naive.replace(tzinfo=zone, fold=1).utcoffset():
         raise ValueError("That time occurs twice because the clocks change. Choose another time.")
     return value.astimezone(dt_timezone.utc)
+
+
+def get_day_hours(prefs, day):
+    return DayHours.objects.filter(user_id=prefs.user_id, date=day).first() or SimpleNamespace(
+        start=prefs.day_start, end=prefs.day_end, pk=None)
+
+
+def workday_bounds(day, prefs, hours=None):
+    hours = hours if hours is not None else get_day_hours(prefs, day)
+    schedule_day = day + timedelta(days=int(hours.start < prefs.day_rollover))
+    return instant(schedule_day, hours.start, prefs), instant(schedule_day, hours.end, prefs)
 
 
 def block_bounds(block, prefs):
@@ -452,12 +463,11 @@ def summary(sessions):
     }
 
 
-def plan(day, prefs, blocks, sessions, now):
+def plan(day, prefs, blocks, sessions, now, hours=None):
     """Project complete pomos into free time only; never fabricate historical work."""
     if day < local_day(prefs, now):
         return []
-    schedule_day = day + timedelta(days=int(prefs.day_start < prefs.day_rollover))
-    windows = [(instant(schedule_day, prefs.day_start, prefs), instant(schedule_day, prefs.day_end, prefs))]
+    windows = [workday_bounds(day, prefs, hours)]
     windows.extend(block_bounds(b, prefs) for b in blocks if b.kind == "work")
     merged = []
     for first, last in sorted(windows):
@@ -586,8 +596,7 @@ def start_break(user, prefs, now):
 
 
 def auto_window_end(user, prefs, now):
-    day = calendar_day(prefs, now)
-    start, end = instant(day, prefs.day_start, prefs), instant(day, prefs.day_end, prefs)
+    start, end = workday_bounds(local_day(prefs, now), prefs)
     if start <= now < end:
         return end
     work = work_at(user, prefs, now)
