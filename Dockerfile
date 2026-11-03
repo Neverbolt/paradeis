@@ -14,4 +14,4 @@ RUN DEBUG=0 ALLOWED_HOSTS=localhost \
 USER paradeis
 ENV DATABASE_PATH=/data/paradeis.sqlite3
 EXPOSE 8000
-CMD ["sh", "-c", "python manage.py migrate --noinput && exec gunicorn paradeis.wsgi:application --bind 0.0.0.0:8000 --workers 1 --threads 4 --timeout 45 --access-logfile - --error-logfile -"]
+CMD ["python", "-m", "scripts.serve"]

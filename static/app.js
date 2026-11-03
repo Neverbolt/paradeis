@@ -1731,6 +1731,7 @@ function openSettings() {
   for (const [key, value] of Object.entries(state.preferences))
     if ($(key)) $(key).value = value;
   updateNotifications();
+  loadCompanionStatus().catch(error => companionError(error));
   setRoute("/settings");
   openDialog($("settings-dialog"));
 }
@@ -1805,6 +1806,106 @@ if ("serviceWorker" in navigator)
     .register("/sw.js")
     .then(() => navigator.serviceWorker.ready)
     .catch(() => null);
+let companionConnected = false, companionConfig = null, companionRegistration = null,
+  companionSubscription = null, companionBusy = false, companionRead = 0;
+function companionNeedsHomeScreen() {
+  const apple = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  return apple && !navigator.standalone && !window.matchMedia?.("(display-mode: standalone)").matches;
+}
+function companionSupported() {
+  return !companionNeedsHomeScreen() && window.isSecureContext && "PushManager" in window && "Notification" in window && !!worker;
+}
+function updateCompanion() {
+  const supported = companionSupported();
+  $("companion-toggle").disabled = companionBusy || !companionConfig || !supported || !companionRegistration;
+  $("companion-toggle").setAttribute("aria-pressed", String(companionConnected));
+  $("companion-status").textContent = !supported ? "unavailable" : companionConnected ? "on" : "off";
+  $("companion-test").disabled = companionBusy || !companionConnected;
+  if (!supported) {
+    $("companion-help").textContent = companionNeedsHomeScreen()
+      ? "On iPhone or iPad, add Paradeis to your Home Screen, open it from there, then enable notifications."
+      : "Companion alerts need HTTPS and a browser that supports push notifications.";
+  } else if (companionConfig && !companionRegistration) {
+    $("companion-help").textContent = "Background notifications could not start in this browser. Reload and try again.";
+  } else if (Notification.permission === "denied") {
+    $("companion-help").textContent = "Allow notifications in this device's browser or app settings.";
+  } else if (companionConnected) {
+    $("companion-help").textContent = companionConfig.worker_online
+      ? "Connected. Alerts can arrive while Paradeis is closed on this device."
+      : "Connected. Waiting for the server notification service.";
+  } else {
+    $("companion-help").textContent = "Enable on each device that should receive timer alerts.";
+  }
+}
+function companionError(error) {
+  $("companion-help").textContent = error.message || "Could not connect companion notifications.";
+}
+async function loadCompanionStatus() {
+  if (!companionSupported()) {updateCompanion(); return;}
+  const version = ++companionRead;
+  const [config, registration] = await Promise.all([api("push/"), worker]);
+  const subscription = registration ? await registration.pushManager.getSubscription() : null;
+  if (version !== companionRead) return;
+  companionConfig = config;
+  companionRegistration = registration;
+  companionSubscription = subscription;
+  companionConnected = !!(config.enabled && subscription && Notification.permission === "granted");
+  updateCompanion();
+}
+function pushKey(value) {
+  const bytes = atob(value.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - value.length % 4) % 4));
+  return Uint8Array.from(bytes, char => char.charCodeAt(0));
+}
+$("companion-toggle").onclick = async () => {
+  if (companionBusy || !companionConfig || !companionRegistration) return;
+  companionBusy = true;
+  updateCompanion();
+  try {
+    if (companionConnected) {
+      // Stop server delivery first, even if browser-side unsubscription fails.
+      await api("push/", {action: "unsubscribe"});
+      companionConnected = false;
+      localStorage.removeItem("companion-enabled");
+      if (companionSubscription) await companionSubscription.unsubscribe();
+    } else {
+      if (Notification.permission === "denied") throw new Error("Allow notifications in this device's browser or app settings.");
+      // Cached registration/key let subscribe run directly from the user's tap,
+      // as required for the permission prompt on Home Screen apps.
+      const subscription = await (companionSubscription || companionRegistration.pushManager.subscribe({
+        userVisibleOnly: true, applicationServerKey: pushKey(companionConfig.public_key)}));
+      const label = /iPhone|iPad/.test(navigator.userAgent) ? "iPhone / iPad" : /Android/.test(navigator.userAgent) ? "Android phone" : "Companion browser";
+      await api("push/", {action: "subscribe", subscription: subscription.toJSON(), label});
+      localStorage.setItem("companion-enabled", "yes");
+    }
+    await loadCompanionStatus();
+  } catch (error) {
+    companionError(error);
+  } finally {
+    companionBusy = false;
+    const message = $("companion-help").textContent;
+    updateCompanion();
+    // Keep a concrete subscription/delivery error visible after re-enabling controls.
+    if (!companionConnected && message && message !== "Enable on each device that should receive timer alerts.")
+      $("companion-help").textContent = message;
+  }
+};
+$("companion-test").onclick = async () => {
+  if (companionBusy || !companionConnected) return;
+  companionBusy = true;
+  updateCompanion();
+  try {
+    await api("push/", {action: "test"});
+    $("companion-help").textContent = "Test queued. Look for a notification on this device.";
+  } catch (error) {companionError(error);}
+  finally {companionBusy = false; $("companion-test").disabled = false; $("companion-toggle").disabled = false;}
+};
+updateCompanion();
+if (localStorage.getItem("companion-enabled") === "yes")
+  loadCompanionStatus().catch(companionError);
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", event => {
+  if (event.data?.type === "timer-push" && !document.hidden) refresh().catch(showError);
+});
 function notificationEnabled() {
   return localStorage.getItem("notifications") !== "off";
 }
@@ -1866,6 +1967,7 @@ async function notifyEnd(s) {
     completionTitle = `${title} · Paradeis`;
     document.title = completionTitle;
   }
+  if (companionConnected) return;
   try {
     const registration = worker ? await worker : null;
     if (registration) await registration.showNotification(title, options);

@@ -18,7 +18,7 @@ Paradeis pairs a compact timer and task queue with a day timeline. The logo, vie
 - **Reviews:** clickable pending-session cards, free-form task fields, visible timeline notes, and up to five sand tokens shared across the tasks. No percentage splits or required todo selection. Existing reviewed sessions migrate their effort to task tokens without changing the total.
 - **History and notes:** the calendar loads a rolling three-month window, aligned to complete Monday-based weeks, with a 112-day API limit. Seven days fit the calendar viewport and navigation moves by Monday-based weeks. Horizontal scrolling fetches adjacent windows. Explicit saves and retained drafts keep daily, weekly, and monthly notes editable while navigating.
 - **Tab title:** Settings offers Countdown or Timer completion only. The latter keeps the title stable until an enabled, permitted completion notification is due, and clears the alert when a new session starts. The preference is saved in this browser.
-- **Notifications:** browser notifications at a running timer's deadline, controlled from Settings. Permission is requested when first starting a session. HTTPS and browser permission are required; keep the tab open. Browser suspension, device sleep, and OS notification policies can delay delivery. This does not use server push for closed tabs.
+- **Notifications:** browser-local completion alerts remain available in Settings. Phone companion notifications are opt-in per device and deliver focus/meeting starts and finishes from any device signed into your account, including while the receiving app is closed. The server worker observes timer deadlines independently of browser polling, rechecks paused/cancelled/resized sessions, deduplicates alerts, and expires stale deliveries after 90 seconds. OS notification, Focus/Do Not Disturb, and network policies still control actual delivery. Timers and automatic focus retain their existing semantics; the worker never starts or changes a timer.
 - **Private accounts:** host-created users, Django password hashing and validation, database sessions, CSRF protection, login throttling, and user-scoped queries. No analytics, external scripts, or public signup.
 
 ## Local testing with Docker
@@ -45,6 +45,19 @@ python manage.py runserver
 ```
 
 SQLite defaults to `db.sqlite3`. Use `DATABASE_PATH` to select another file. Settings start in production mode unless `DEBUG=1` is explicitly set; `manage.py` does not load `.env` automatically.
+
+## Phone companion notifications
+
+1. Open your HTTPS Paradeis site on your phone and sign into the same account as your computer.
+2. On iPhone/iPad (iOS/iPadOS 16.4+), use Share → Add to Home Screen, then open Paradeis from that icon. Android can use its browser or an installed Home Screen app.
+3. Open Settings → Phone companion → Companion notifications and allow the notification prompt.
+4. Tap Send a test notification. Enable notifications on every companion device that should receive alerts.
+
+The setting applies to the receiving device, so your computer can keep its existing browser-local alerts. Companion devices receive live focus and meeting starts/finishes; manually recorded historical sessions do not create alerts. Enabling midway through a timer subscribes to its upcoming completion. Disconnecting or signing out on the receiving device stops future server delivery. A denied permission must be changed in the device's browser/app settings.
+
+Docker starts the web server and notification worker together; existing image deployments need no additional service or push-provider account. Application-server signing keys are generated once and persist in the existing database, so preserve the `/data` volume across updates. Browser push services receive encrypted, signed payloads. The server needs outbound HTTPS access to the browser's push provider (Apple, Google, Mozilla, or Windows).
+
+For development outside Docker, run `python manage.py sendpush` alongside `runserver`. `--once` performs one poll. The companion settings report when the notification service has not checked in recently. Phone push requires HTTPS; localhost browser testing can use local permission and push mocks. An actual phone subscription/permission and lock-screen delivery must be verified on the device using the test button.
 
 ## Deploy on the internet
 

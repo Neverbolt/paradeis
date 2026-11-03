@@ -1266,3 +1266,7 @@ dialog::backdrop {
 .timeline-boundary .timeline-end-label::after {content: "✎"; font-size: 11px; opacity: .5;}
 .timeline-boundary:hover {background: var(--sage);}
 .timeline-boundary:hover .timeline-end-label, .timeline-boundary:focus-visible .timeline-end-label {color: var(--green);}
+
+.notification-heading {margin: 22px 0 10px;}
+.companion-settings {margin-top: 18px; display: grid; gap: 9px;}
+.companion-settings #companion-test {justify-self: start; padding-left: 0;}

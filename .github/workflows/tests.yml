@@ -47,6 +47,11 @@ jobs:
         run: python manage.py check --deploy --fail-level WARNING
       - name: Build container
         run: docker build -t paradeis:test .
+      - name: Check web and companion worker startup
+        run: |
+          docker run -d --name paradeis-runtime --env DEBUG=1 paradeis:test
+          trap 'docker logs paradeis-runtime; docker rm -f paradeis-runtime' EXIT
+          docker exec paradeis-runtime python -m scripts.check_runtime
       - name: Check production templates and collected assets
         run: |
           docker run --rm --env DEBUG=0 --env ALLOWED_HOSTS=localhost \

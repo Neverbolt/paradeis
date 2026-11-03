@@ -108,6 +108,51 @@ function checkWorkWrappingUI(w) {
 
 }
 
+async function checkCompanionUI(w) {
+  const $ = id => w.document.getElementById(id);
+  const originalWorker = w.eval('worker'), secure = Object.getOwnPropertyDescriptor(w, 'isSecureContext');
+  const originalPushManager = w.PushManager;
+  Object.defineProperty(w, 'isSecureContext', {configurable: true, value: true});
+  w.PushManager = function() {};
+  const config = await w.api('push/');
+  let subscription = null;
+  const registration = {pushManager: {
+    getSubscription: async () => subscription,
+    subscribe: async options => {
+      assert.equal(options.userVisibleOnly, true);
+      assert.equal(options.applicationServerKey.length, 65);
+      subscription = {toJSON: () => ({endpoint: 'https://fcm.googleapis.com/wp/ui-companion',
+        keys: {p256dh: config.public_key, auth: 'AAAAAAAAAAAAAAAAAAAAAA'}}),
+        unsubscribe: async () => {subscription = null; return true;}};
+      return subscription;
+    },
+  }};
+  w.__companionRegistration = registration;
+  w.eval('worker = Promise.resolve(window.__companionRegistration)');
+  w.openSettings();
+  await waitFor(() => !$('companion-toggle').disabled, 'companion registration ready');
+  $('companion-toggle').click();
+  await waitFor(() => $('companion-status').textContent === 'on' && !$('companion-toggle').disabled, 'phone companion enabled');
+  assert.equal((await w.api('push/')).enabled, true);
+  assert.equal(w.localStorage.getItem('companion-enabled'), 'yes');
+  await w.loadCompanionStatus();
+  assert.equal($('companion-status').textContent, 'on');
+  $('companion-test').click();
+  await waitFor(() => $('companion-help').textContent.startsWith('Test queued.'), 'test notification queued');
+  await waitFor(() => !$('companion-toggle').disabled, 'companion controls ready');
+  $('companion-toggle').click();
+  await waitFor(() => $('companion-status').textContent === 'off' && !$('companion-toggle').disabled, 'companion disabled');
+  assert.equal((await w.api('push/')).enabled, false);
+  assert.equal(subscription, null);
+  assert.equal(w.localStorage.getItem('companion-enabled'), null);
+  $('settings-dialog').close();
+  w.__originalWorker = originalWorker;
+  w.eval('worker = window.__originalWorker; companionConfig = companionRegistration = companionSubscription = null; companionConnected = false;');
+  if (secure) Object.defineProperty(w, 'isSecureContext', secure); else delete w.isSecureContext;
+  if (originalPushManager) w.PushManager = originalPushManager; else delete w.PushManager;
+  w.updateCompanion();
+}
+
 async function checkDayHoursUI(w) {
   const $ = id => w.document.getElementById(id);
   const today = w.eval("state.today"), tomorrow = w.shiftDay(today, 1);
@@ -298,7 +343,7 @@ async function checkSchedulingUI(w) {
     await w.api("blocks/", {kind: "work", title: "Strategy", date: w.localDate(workStart),
       start: w.clock(workStart), end: w.clock(workEnd)});
     await w.refresh();
-    assert.equal($("timer-task").textContent, "Strategy");
+    assert.equal($("timer-task").textContent, "Strategy", JSON.stringify(w.eval("({topic: nextTopicChoice, default: state.default_topic, active: state.active, now: state.now, preferences: state.preferences})")));
     assert($("timeline").querySelector(".work-reservation"));
     assert(!$("timeline").querySelector(".reserved.work"));
     assert(w.document.querySelector('#block-kind option[value="work"]'));
@@ -463,6 +508,8 @@ async function checkSchedulingUI(w) {
   await waitFor(() => !$("day-plan-dialog").open && !w.eval("busy"), "start day");
   await w.refresh();
   assert(!$("day-plan-dialog").open, "Planning completion persists");
+  await require("./sw_smoke.cjs")();
+  await checkCompanionUI(w);
   await checkDayHoursUI(w);
   if (process.env.PARADEIS_SCHEDULING_ONLY === "1") {
     await checkSchedulingUI(w);

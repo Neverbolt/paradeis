@@ -89,6 +89,40 @@ fs.mkdirSync("test-results", { recursive: true });
     await waitFor(() => state.day.date === state.today);
     assert.equal(await page.evaluate(() => state.day.workday.customized), false);
     await page.setViewportSize({width: 1280, height: 800});
+    await context.grantPermissions(['notifications']);
+    await page.evaluate(async () => {
+      const config = await api('push/');
+      window.realCompanionWorker = worker;
+      let subscription = null;
+      worker = Promise.resolve({pushManager: {
+        getSubscription: async () => subscription,
+        subscribe: async () => {
+          subscription = {toJSON: () => ({endpoint: 'https://fcm.googleapis.com/wp/browser-companion',
+            keys: {p256dh: config.public_key, auth: 'AAAAAAAAAAAAAAAAAAAAAA'}}),
+            unsubscribe: async () => {subscription = null; return true;}};
+          return subscription;
+        },
+      }});
+    });
+    await page.locator('#settings-open').click();
+    await waitFor(() => !document.querySelector('#companion-toggle').disabled);
+    await page.locator('#companion-toggle').click();
+    await waitFor(() => document.querySelector('#companion-status').textContent === 'on' && !document.querySelector('#companion-toggle').disabled);
+    assert.equal(await page.evaluate(async () => (await api('push/')).enabled), true);
+    await page.locator('#companion-test').click();
+    await waitFor(() => document.querySelector('#companion-help').textContent.startsWith('Test queued.'));
+    await page.screenshot({path: 'test-results/phone-companion-1280.png'});
+    await page.setViewportSize({width: 390, height: 844});
+    await page.locator('#companion-toggle').scrollIntoViewIfNeeded();
+    await page.screenshot({path: 'test-results/phone-companion-390.png'});
+    assert(await page.locator('#settings-dialog').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+    await page.locator('#companion-toggle').click();
+    await waitFor(() => document.querySelector('#companion-status').textContent === 'off' && !document.querySelector('#companion-toggle').disabled);
+    assert.equal(await page.evaluate(async () => (await api('push/')).enabled), false);
+    await page.getByRole('button', {name: 'Close settings', exact: true}).click();
+    await page.evaluate(() => {worker = window.realCompanionWorker;});
+    await context.clearPermissions();
+    await page.setViewportSize({width: 1280, height: 800});
     await page.bringToFront();
     await waitFor(() => !document.documentElement.classList.contains("window-unfocused"));
     // Headless Chromium keeps page focus emulated across tabs; exercise the
