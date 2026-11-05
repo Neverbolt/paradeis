@@ -30,6 +30,22 @@ fs.mkdirSync("test-results", { recursive: true });
       page.getByRole("button", { name: "Sign in" }).click(),
     ]);
     await page.waitForSelector(".current-time");
+    for (const period of ['quarter','month','week']) {
+      await waitFor(p => document.querySelector('#period-goal-dialog').open &&
+        !document.querySelector('#period-goal-text').disabled && periodEditing?.period === p, period);
+      assert.equal(await page.locator('#period-goal-context textarea').count(), 0);
+      await page.locator('#period-goal-text').fill(period === 'quarter' ? '**Quarter direction**' : period === 'month' ? '*Monthly direction*' : 'Weekly direction');
+      if (period === 'month') assert(await page.locator('#period-goal-context').textContent().then(text => text.includes('Quarter direction')));
+      if (period === 'week') {
+        assert((await page.locator('#period-goal-context').textContent()).includes('Monthly direction'));
+        await page.screenshot({path:'test-results/planning-hierarchy-1280.png'});
+        await page.setViewportSize({width:390,height:844});
+        await page.screenshot({path:'test-results/planning-hierarchy-390.png'});
+        await page.setViewportSize({width:1280,height:800});
+      }
+      await page.locator('#period-goal-text').press('Control+Enter');
+      await waitFor(() => !busy && !periodSaving);
+    }
     await page.waitForSelector('#day-plan-dialog[open]');
     assert(await page.locator('#day-plan-goal').evaluate(el => el === document.activeElement));
     assert.equal(await page.locator('#task-list .task-row').count(), 0);
@@ -60,6 +76,65 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector('.current-time');
     assert.equal(await page.locator('#day-plan-dialog[open]').count(), 0);
     await page.setViewportSize({width: 1280, height: 800});
+    await page.locator('#overview-view').click();
+    await page.waitForSelector('.calendar-day');
+    await page.evaluate(async()=>{calendarAnchor='2026-11-01';await loadCalendar({target:'2026-10-26'});});
+    await waitFor(()=>calendarWeek==='2026-10-26'&&document.querySelectorAll('#calendar-periods .period-group.month').length===2);
+    const octoberNote=page.locator('#calendar-periods [data-period="month:2026-10-01"] textarea');
+    await octoberNote.fill('*October reflection*');
+    await octoberNote.press('Control+Enter');
+    await waitFor(()=>document.querySelector('#calendar-periods [data-period="month:2026-10-01"] .note-actions').textContent.includes('Saved'));
+    assert.equal(await page.locator('#calendar-periods [data-period="month:2026-10-01"] .markdown-mirror em').textContent(),'*October reflection*');
+    for(const width of [1280,390]) {
+      await page.setViewportSize({width,height:width===390?844:800});
+      assert(await page.locator('#calendar-periods .period-group.month').evaluateAll(groups=>groups.every(group=>{
+        const box=group.getBoundingClientRect();return box.left>=0&&box.right<=innerWidth+1;
+      })));
+      await page.locator('#calendar-periods .month-row').scrollIntoViewIfNeeded();
+      await page.screenshot({path:`test-results/overview-month-boundary-${width}.png`});
+    }
+    await page.setViewportSize({width:1280,height:800});
+    await page.locator('#calendar-periods [data-period="month:2026-10-01"] .period-goals button').click();
+    await waitFor(()=>document.querySelector('#period-goal-dialog').open&&!document.querySelector('#period-goal-text').disabled);
+    await page.locator('#period-goal-text').fill('**An October outcome**');
+    await page.locator('#period-goal-text').press('Control+Enter');
+    await waitFor(()=>!document.querySelector('#period-goal-dialog').open&&!busy&&!periodSaving);
+    assert.equal(await page.evaluate(()=>calendarWeek),'2026-10-26');
+    assert.equal(await page.locator('#calendar-periods .period-goals textarea').count(),0);
+    await page.locator('#today-view').click();
+    await waitFor(()=>!document.querySelector('#day-view').hidden);
+    await page.evaluate(()=>calendarAnchor=month(state.today));
+    await page.locator('#settings-open').click();
+    await page.locator('#planning-settings-open').click();
+    await waitFor(()=>document.querySelectorAll('#planning-rule-fields .planning-rule').length===3);
+    const weekAdvance=page.locator('#planning-rule-fields [data-period="week"] [data-field="enabled"]');
+    await weekAdvance.check();
+    assert.equal(await page.locator('#planning-rule-fields [data-period="week"] [data-field="weekday"]').isDisabled(),false);
+    await page.locator('#planning-rule-fields [data-period="week"] [data-field="minutes"]').fill('35');
+    await page.screenshot({path:'test-results/planning-schedule-1280.png'});
+    await page.setViewportSize({width:390,height:844});
+    await page.screenshot({path:'test-results/planning-schedule-390.png'});
+    assert(await page.locator('#planning-settings-dialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1));
+    await page.setViewportSize({width:1280,height:800});
+    await weekAdvance.uncheck();
+    await page.locator('#planning-settings-form button[type="submit"]').click();
+    await waitFor(()=>!document.querySelector('#planning-settings-dialog').open&&!busy);
+    assert.equal(await page.evaluate(async()=>(await api('planning-settings/')).rules.find(rule=>rule.period==='week').minutes),35);
+    await page.locator('#recurrences-open').click();
+    await page.locator('#recurrence-add').click();
+    await page.locator('#repeat-title').fill('Selected weekday check');
+    await page.locator('#repeat-frequency').selectOption('daily');
+    await page.locator('#repeat-start').fill('06:00');await page.locator('#repeat-end').fill('06:30');
+    for (const day of [1,3,5,6]) await page.locator(`#repeat-weekdays input[value="${day}"]`).uncheck();
+    await page.screenshot({path:'test-results/recurring-weekday-selection.png'});
+    await page.locator('#recurrence-form button[type="submit"]').click();
+    await waitFor(()=>!busy&&!document.querySelector('#recurrences-dialog').open&&document.querySelectorAll('.recurrence-card').length===3);
+    assert.deepEqual(await page.evaluate(async()=>(await api('recurrences/')).templates.find(t=>t.title==='Selected weekday check').weekdays),[0,2,4]);
+    await page.locator('.recurrence-card').first().click();
+    await page.locator('#recurrence-delete').click();
+    await waitFor(()=>!busy&&!document.querySelector('#recurrences-dialog').open&&document.querySelectorAll('.recurrence-card').length===0);
+    await page.locator('#today-view').click();
+    await waitFor(()=>!document.querySelector('#day-view').hidden);
     const hoursDay = await page.evaluate(() => shiftDay(state.today, 1));
     await page.locator('#day-next').click();
     await waitFor(day => state.day.date === day, hoursDay);

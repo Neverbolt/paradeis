@@ -46,6 +46,16 @@ python manage.py runserver
 
 SQLite defaults to `db.sqlite3`. Use `DATABASE_PATH` to select another file. Settings start in production mode unless `DEBUG=1` is explicitly set; `manage.py` does not load `.env` automatically.
 
+## Goals and planning
+
+Weekly, monthly, and calendar-quarter goals are separate from notes. The first visit with an empty current-period goal opens planning (quarter → month → week), before the daily task chooser. Later defers the prompt for this visit; it returns on another visit until goals are saved. Daily planning shows weekly goals; weekly planning shows the monthly and quarterly goals covering that week, including both sides of a month/quarter boundary; monthly planning shows quarterly goals. Each period editor also shows its previous period's goals as read-only context.
+
+The overview keeps the visible week's goal/notes panels outside the horizontally scrolling day grid. Weeks spanning a month or quarter boundary show both relevant periods, so a Sunday month start cannot push the prior editor off-screen. Goals stay read-only there; Edit reopens the original planning dialog. Notes remain directly editable, including new quarter notes. `*italic*`, `**bold**`, inline backticks, and heading markers get light source-preserving styling: formatting characters remain visible, and HTML is always treated as text. Ctrl/Cmd+Enter saves textarea forms.
+
+Settings → Planning schedule configures working weekdays and optional advance triggers for each period. Weekly triggers use a weekday/time in the prior week; monthly/quarterly triggers use the prior period's last working day or a chosen day of its final month, clamped for short months. Times use the account timezone. Each rule has its own planning-pomo duration (1–180 minutes). Advance planning is off until enabled. A valid trigger reserves a fixed planning pomo; conflicting reservations or tracked work leave it unscheduled until you explicitly choose a time in the goals dialog. Conflicts never automatically move existing activity, and a removed reservation is not silently recreated. Starting the reserved planning pomo records an ordinary focus session, with the normal review and metrics; it does not start itself.
+
+Daily recurring schedules now have weekday checkboxes, in both the block creator and recurring schedule editor. Existing daily schedules retain all seven days. Selected-weekday patterns participate in overlap validation, so disjoint weekday selections may use the same clock time.
+
 ## Phone companion notifications
 
 1. Open your HTTPS Paradeis site on your phone and sign into the same account as your computer.

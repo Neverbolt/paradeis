@@ -34,6 +34,8 @@ urlpatterns = [
     path("api/sessions/<int:pk>/review/", views.review),
     path("api/blocks/", views.block_save),
     path("api/blocks/<int:pk>/", views.block_save),
+    path("api/goals/", views.period_goals),
+    path("api/planning-settings/", views.planning_settings),
     path("api/notes/", views.notes),
     path("api/settings/", views.settings_save),
     path("api/recurrences/", views.recurrences),
