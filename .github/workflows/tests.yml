@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node --check static/app.js
+      - run: node --check static/app.js && node --check static/planning.js
       - name: Test UI interactions against a disposable local server
         run: |
           npm install --no-save --package-lock=false jsdom@26 playwright@1.51.1

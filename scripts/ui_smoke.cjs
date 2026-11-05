@@ -108,6 +108,86 @@ function checkWorkWrappingUI(w) {
 
 }
 
+async function checkPeriodPlanningUI(w) {
+  const $ = id => w.document.getElementById(id), originalAnchor=w.eval("calendarAnchor");
+  await w.showView(true);
+  w.eval("calendarAnchor = '2026-11-01'");
+  await w.loadCalendar({target:'2026-10-26'});
+  assert.equal(w.eval('calendarWeek'),'2026-10-26');
+  const months=()=>[...w.document.querySelectorAll('#calendar-periods .period-group.month')];
+  assert.deepEqual(months().map(group=>group.dataset.period),['month:2026-10-01','month:2026-11-01']);
+  let october=months()[0], input=october.querySelector('textarea');
+  input.value='*October reflection*';input.dispatchEvent(new w.Event('input',{bubbles:true}));
+  assert.equal(october.querySelector('.markdown-mirror em').textContent,'*October reflection*');
+  await w.navigateCalendarWeek(1);await w.navigateCalendarWeek(-1);
+  october=months()[0];input=october.querySelector('textarea');
+  assert.equal(input.value,'*October reflection*','Month draft survives navigating into November and back');
+  input.form.requestSubmit();
+  await waitFor(()=>october.querySelector('.note-actions').textContent.includes('Saved'),'save October note');
+  october.querySelector('.period-goals button').click();
+  await waitFor(()=>$('period-goal-dialog').open&&!$('period-goal-text').disabled,'original goal editor reopened');
+  $('period-goal-text').value='**A defined October outcome**';
+  $('period-goal-text').dispatchEvent(new w.Event('input',{bubbles:true}));
+  $('period-goal-form').requestSubmit();
+  await waitFor(()=>!$('period-goal-dialog').open&&!w.eval('busy || periodSaving'),'save edited monthly goal');
+  assert.equal(w.eval('calendarWeek'),'2026-10-26','Editing a goal preserves the visible week');
+  assert.equal(months()[0].querySelector('.period-goals textarea'),null);
+  assert(months()[0].querySelector('.period-goals strong').textContent.includes('**A defined October outcome**'));
+  months()[1].querySelector('.period-goals button').click();
+  await waitFor(()=>$('period-goal-dialog').open&&!$('period-goal-text').disabled,'next month editor');
+  assert($('period-goal-previous').textContent.includes('A defined October outcome'));
+  $('period-goal-close').click();
+  const q=w.document.querySelector('#calendar-periods .period-group.quarter');
+  q.querySelector('textarea').value='*Quarter reflection*';
+  q.querySelector('textarea').dispatchEvent(new w.Event('input',{bubbles:true}));
+  q.querySelector('form').requestSubmit();
+  await waitFor(()=>q.querySelector('.note-actions').textContent.includes('Saved'),'save quarter note');
+  const untrusted=w.document.createElement('div');w.sourceMarkdown(untrusted,'*<img src=x onerror=alert(1)>*');
+  assert.equal(untrusted.querySelector('img'),null);assert(untrusted.querySelector('em').textContent.includes('<img'));
+  await w.showView(false);
+  await w.openPlanningSettings();
+  w.makeWeekdays($('planning-workdays'),[0,1,2,3,6]);
+  $('planning-rule-fields').querySelector('[data-period="week"] [data-field="minutes"]').value='35';
+  $('planning-settings-form').requestSubmit();
+  await waitFor(()=>!$('planning-settings-dialog').open&&!w.eval('busy'),'save planning settings');
+  const settings=await w.api('planning-settings/');
+  assert.deepEqual(Array.from(settings.workdays),[0,1,2,3,6]);
+  assert.equal(settings.rules.find(rule=>rule.period==='week').minutes,35);
+  await w.openRecurrences();
+  w.editRecurrence({title:'Selected weekday check',kind:'meeting',frequency:'daily',weekday:0,weekdays:[1,3],
+    interval_weeks:1,anchor_date:w.eval('state.today'),start:'06:00',end:'06:15'});
+  assert.equal($('repeat-weekdays').hidden,false);
+  $('recurrence-form').requestSubmit();
+  await waitFor(()=>!$('recurrences-dialog').open&&w.document.querySelectorAll('.recurrence-card').length===2&&!w.eval('busy'),'selected weekdays in recurring week');
+  const template=(await w.api('recurrences/')).templates.find(t=>t.title==='Selected weekday check');
+  assert.deepEqual(Array.from(template.weekdays),[1,3]);
+  const cards=[...w.document.querySelectorAll('.recurrence-card')];
+  assert(cards.every(card=>/Tuesday|Thursday/.test(card.getAttribute('aria-label'))));
+  w.editRecurrence(template);$('recurrence-delete').click();
+  await waitFor(()=>!$('recurrences-dialog').open&&w.document.querySelectorAll('.recurrence-card').length===0&&!w.eval('busy'),'remove weekday fixture');
+  w.__originalPlanningAnchor=originalAnchor;w.eval("calendarAnchor=window.__originalPlanningAnchor");
+  await w.showView(false);
+}
+
+async function checkPlanningTimerUI(w) {
+  const $=id=>w.document.getElementById(id), original=await w.api('state/');
+  const end=new Date(Date.now()+1500000).toISOString(), start=new Date(Date.now()-1000).toISOString();
+  const block={id:987123,kind:'planning',title:'Weekly planning',start,end,tracked:false,
+    planning:{period:'week',date:w.monday(original.today)}};
+  overrideState=()=>({...original,now:new Date().toISOString(),active:null,live_block:block,next_block:block,next_seconds:0});
+  await w.refresh();
+  assert.equal($('timer-main').textContent,'Start planning');assert.equal($('timer-main').disabled,false);
+  boundaryStart=undefined;$('timer-main').click();
+  await waitFor(()=>boundaryStart?.block_id===block.id&&!w.eval('busy'),'start reserved planning timer');
+  const active={id:987124,kind:'focus',planning:true,title:'Weekly planning',status:'running',start,end,
+    remaining:1500,elapsed:0,allocations:[],can_overrun:false};
+  overrideState=()=>({...original,now:new Date().toISOString(),active,live_block:block,next_block:block});
+  await w.refresh();assert.equal($('timer-main').textContent,'Finish');assert.equal($('timer-topic').hidden,true);
+  boundaryStart=undefined;$('timer-main').click();
+  await waitFor(()=>boundaryStart?.action==='finish'&&!w.eval('busy'),'planning timer finishes instead of pausing');
+  overrideState=undefined;boundaryStart=undefined;await w.refresh();
+}
+
 async function checkCompanionUI(w) {
   const $ = id => w.document.getElementById(id);
   const originalWorker = w.eval('worker'), secure = Object.getOwnPropertyDescriptor(w, 'isSecureContext');
@@ -483,8 +563,21 @@ async function checkSchedulingUI(w) {
   const change = (id) =>
     $(id).dispatchEvent(new w.Event("input", { bubbles: true }));
   await waitFor(() => $("timeline").children.length > 0, "initial state");
+  for (const period of ["quarter","month","week"]) {
+    await waitFor(() => $("period-goal-dialog").open && !$("period-goal-text").disabled &&
+      w.eval("periodEditing.period") === period, `initial ${period} planning`);
+    assert.equal($("period-goal-context").querySelectorAll("textarea").length, 0);
+    assert.equal($("period-goal-previous").querySelectorAll(".goal-reference").length, 1);
+    if (period === "month") assert($("period-goal-context").textContent.includes("Quarter direction"));
+    if (period === "week") assert($("period-goal-context").textContent.includes("Monthly direction"));
+    $("period-goal-text").value = period === "quarter" ? "**Quarter direction**" : period === "month" ? "*Monthly direction*" : "Weekly direction";
+    $("period-goal-text").dispatchEvent(new w.Event("input", {bubbles:true}));
+    $("period-goal-form").requestSubmit();
+    await waitFor(() => !w.eval("busy || periodSaving"), `save initial ${period} goals`);
+  }
   await waitFor(() => $("day-plan-dialog").open, "daily planning opens first");
   assert.equal(w.document.activeElement, $("day-plan-goal"));
+  assert($("day-plan-weekly-context").textContent.includes("Weekly direction"));
   assert.equal($("task-list").children.length, 0);
   assert.equal($("day-plan-previous").children.length, 2);
   const cancelPlan = new w.Event("cancel", {cancelable: true});
@@ -509,6 +602,8 @@ async function checkSchedulingUI(w) {
   await w.refresh();
   assert(!$("day-plan-dialog").open, "Planning completion persists");
   await require("./sw_smoke.cjs")();
+  await checkPeriodPlanningUI(w);
+  await checkPlanningTimerUI(w);
   await checkCompanionUI(w);
   await checkDayHoursUI(w);
   if (process.env.PARADEIS_SCHEDULING_ONLY === "1") {
@@ -552,7 +647,7 @@ async function checkSchedulingUI(w) {
   assert.equal(completedState.day.completed_tasks.length, 1);
   assert.equal(completedState.tasks.find(t => t.done).completed_on, completedState.today);
   await click("overview-view");
-  await waitFor(() => w.document.querySelector(".day-completed-tasks"), "completed task in calendar");
+  await waitFor(() => [...w.document.querySelectorAll(".calendar-day.today .completed-result")].some(row=>row.textContent.includes("✓ Updated proposal")), "completed task in current calendar data");
   assert([...w.document.querySelectorAll(".calendar-day.today .completed-result")].some(row => row.textContent.includes("✓ Updated proposal")));
   await click("today-view");
   $("completed-task-list").querySelector(".task-check").click();
@@ -747,9 +842,10 @@ async function checkSchedulingUI(w) {
   );
   assert.equal(w.location.pathname, "/overview");
   assert(w.document.querySelectorAll(".calendar-day").length <= 112);
-  assert.equal(w.document.querySelectorAll(".period-group.month").length, 3);
+  assert(w.document.querySelectorAll(".period-group.month").length >= 1);
+  assert.equal(w.document.querySelectorAll(".period-group.quarter").length, 1);
   for (const group of w.document.querySelectorAll(".period-group.week")) {
-    assert(group.style.gridColumn.includes("span 7"));
+    assert(group.closest("#calendar-periods"));
     const day = group.dataset.period.split(":")[1];
     assert.equal(
       new Date(`${day}T12:00:00Z`).getUTCDay(),
@@ -760,6 +856,7 @@ async function checkSchedulingUI(w) {
   for (const [period, text] of [
     ["week", "Weekly"],
     ["month", "Monthly"],
+    ["quarter", "Quarterly"],
   ]) {
     const group = w.document.querySelector(`.period-group.${period}`);
     const textarea = group.querySelector("textarea");

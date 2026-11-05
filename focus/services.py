@@ -235,14 +235,14 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False, topic=Non
     kind, title = "focus", task.title if task else "Open focus"
     seconds, upcoming = next_focus(user, prefs, now, ignore_break)
     if block_id:
-        block = Block.objects.get(id=block_id, user=user, kind="meeting", deleted=False)
+        block = Block.objects.get(id=block_id, user=user, kind__in=["meeting", "planning"], deleted=False)
         start, end = block_bounds(block, prefs)
         if not start <= now < end:
-            raise Conflict("Start this meeting during its scheduled time.")
+            raise Conflict("Start this reserved session during its scheduled time.")
         if block.session_set.exclude(status="cancelled").exists():
-            raise Conflict("This meeting has already been tracked.")
+            raise Conflict("This reservation has already been tracked.")
         seconds = math.ceil((end - now).total_seconds())
-        kind, title, task = "meeting", block.title, None
+        kind, title, task = ("focus" if block.kind == "planning" else "meeting"), block.title, None
     if auto:
         seconds = min(seconds, max(0, int((auto_window_end(user, prefs, now) - now).total_seconds())))
     if seconds < 1:
@@ -266,7 +266,10 @@ def start_session(user, prefs, now, block_id=None, ignore_break=False, topic=Non
         planned_seconds=seconds,
     )
     if kind == "focus":
-        choose_topic(session, prefs, now, topic)
+        if block and block.kind == "planning":
+            session.topic_mode, session.work_topic = "work", block.title
+        else:
+            choose_topic(session, prefs, now, topic)
         session.save(update_fields=["title", "topic_mode", "work_topic", "selected_task"])
         task, title = session_topic(session)
     Allocation.objects.create(session=session, task=task, label=title, automatic=kind == "focus")
@@ -428,6 +431,7 @@ def serialize_session(session, now):
         ),
         "reflection": session.reflection,
         "pending_break_seconds": session.pending_break_seconds,
+        "planning": bool(session.block_id and session.block.kind == "planning"),
         "topic_choice": (str(session.selected_task_id) if session.topic_mode == "task"
                          and session.selected_task_id else "open" if session.topic_mode == "open" else ""),
         "topic_default": session.work_topic if session.topic_mode == "work" else "",
@@ -449,6 +453,7 @@ def serialize_block(block, prefs):
         "end": end.isoformat(),
         "start_time": str(block.start)[:5],
         "end_time": str(block.end)[:5],
+        "planning": {"period": block.goal_plan.period, "date": block.goal_plan.date.isoformat()} if block.goal_plan_id else None,
         "template_id": block.template_id,
         "fixed": block.fixed,
     }

@@ -12,7 +12,7 @@ from .models import Block, BlockTemplate
 
 def matches(template, day):
     return day >= template.effective_from and (
-        template.frequency == "daily"
+        (template.frequency == "daily" and day.weekday() in template.weekdays)
         or (
             day.weekday() == template.weekday
             and ((day - template.anchor_date).days // 7) % template.interval_weeks == 0
@@ -24,7 +24,8 @@ def occurrence_days(template, first, last):
     first = max(first, template.effective_from)
     if template.frequency == "daily":
         while first <= last:
-            yield first
+            if first.weekday() in template.weekdays:
+                yield first
             first += timedelta(days=1)
         return
     day = first + timedelta(days=(template.weekday - first.weekday()) % 7)
@@ -119,6 +120,10 @@ def validate_template(template, today, ignore_block=None):
             or template.start >= other.end
             or template.end <= other.start
         ):
+            continue
+        weekdays = set(template.weekdays if template.frequency == "daily" else [template.weekday])
+        other_days = set(other.weekdays if other.frequency == "daily" else [other.weekday])
+        if not weekdays.intersection(other_days):
             continue
         difference = (template.anchor_date - other.anchor_date).days // 7
         if (

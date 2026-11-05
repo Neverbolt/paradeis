@@ -226,6 +226,7 @@ async function refresh() {
 }
 let dayPlanSignature = "", dayPlanManual = false;
 function renderDayPlan() {
+  if (renderPeriodPlanning()) return;
   const plan = state?.day_plan, dialog = $("day-plan-dialog");
   if (!plan) return;
   if (dialog.dataset.date !== plan.date) {
@@ -817,7 +818,7 @@ function tick() {
   const a = state.active, block = currentBlock();
   const resting = !a && !block && Date.parse(state.break_until) > now();
   const waitingBreak = !a && !block && !resting ? state.pending_break : null;
-  $("timer-topic").hidden = !!block || resting || !!waitingBreak || a?.kind === "meeting";
+  $("timer-topic").hidden = !!block || resting || !!waitingBreak || (a?.kind === "meeting" || a?.planning);
   $("timer-topic").disabled = busy;
   for (const id of ["auto-focus", "auto-break"]) $(id).disabled = busy;
   $("timer-skip-break").hidden = !waitingBreak;
@@ -826,23 +827,23 @@ function tick() {
   if (a) {
     seconds = remaining(a);
     mode =
-      a.kind === "meeting"
+      a.planning ? "Planning" : a.kind === "meeting"
         ? "Meeting"
         : a.status === "paused"
           ? "Paused"
           : "Focus";
     task = a.title;
     label =
-      a.kind === "meeting"
+      (a.kind === "meeting" || a.planning)
         ? "Finish"
         : a.status === "paused"
           ? "Resume"
           : "Pause";
   } else if (block) {
     seconds = Math.max(0, (Date.parse(block.end) - now()) / 1000);
-    mode = block.kind === "meeting" ? "Meeting" : "Break";
+    mode = block.kind === "meeting" ? "Meeting" : block.kind === "planning" ? "Planning" : "Break";
     task = block.title;
-    label = "Start meeting";
+    label = block.kind === "planning" ? "Start planning" : "Start meeting";
   } else if (resting) {
     seconds = (Date.parse(state.break_until) - now()) / 1000;
     mode = "Break";
@@ -864,7 +865,7 @@ function tick() {
     state.next_block && Date.parse(state.next_block.start) > now();
   if (waiting) {
     seconds = (Date.parse(state.next_block.start) - now()) / 1000;
-    mode = state.next_block.kind === "meeting" ? "Meeting soon" : "Break soon";
+    mode = state.next_block.kind === "meeting" ? "Meeting soon" : state.next_block.kind === "planning" ? "Planning soon" : "Break soon";
     task = state.next_block.title;
     label = `Starts at ${clock(state.next_block.start)}`;
   }
@@ -887,7 +888,7 @@ function tick() {
     `${state.day.sessions.filter((s) => s.status === "completed").length} completed`;
   for (const id of ["timer-finish", "timer-cancel", "timer-overrun"])
     $(id).disabled = busy;
-  $("timer-finish").hidden = !a || a.kind === "meeting";
+  $("timer-finish").hidden = !a || a.kind === "meeting" || a.planning;
   $("timer-cancel").hidden = !a;
   $("timer-overrun").hidden =
     !extendable(a || state.last_completed) ||
@@ -941,7 +942,7 @@ $("timer-main").onclick = () => {
   const a = state.active, b = currentBlock();
   if (a)
     timerAction(
-      a.kind === "meeting"
+      (a.kind === "meeting" || a.planning)
         ? "finish"
         : a.status === "paused"
           ? "resume"
@@ -1176,6 +1177,7 @@ $("manual-pomo-form").onsubmit = async e => {
   finally { busy = false; tick(); }
 };
 function openBlock(b = null) {
+  if (b?.planning) {openPeriodGoals(b.planning.period,b.planning.date);return;}
   editingBlock = b;
   blockEndEdited = !!b;
   const rounded = Math.ceil((now() + 1) / 300000) * 300000;
@@ -1189,6 +1191,8 @@ function openBlock(b = null) {
   $("block-delete").hidden = !b;
   $("block-repeat-controls").hidden = !!b;
   $("block-repeat").checked = false;
+  makeWeekdays($("block-weekdays"));
+  updateBlockWeekdays();
   $("block-template-edit").hidden = !b?.template_id;
   openDialog($("block-dialog"));
   $("block-name").focus();
@@ -1222,6 +1226,7 @@ $("block-form").onsubmit = (e) => {
   if (!editingBlock && $("block-repeat").checked)
     data.repeat = {
       frequency: $("block-interval").value === "daily" ? "daily" : "weekly",
+      weekdays: chosenWeekdays($("block-weekdays")),
       interval_weeks:
         $("block-interval").value === "daily"
           ? 1
@@ -1240,7 +1245,7 @@ function recurrenceMonthDates(template, today) {
   for (let day = first; day <= last; day = shiftDay(day, 1)) {
     if (day < (template.effective_from || template.anchor_date)) continue;
     const weekday = (new Date(`${day}T12:00:00Z`).getUTCDay() + 6) % 7;
-    if (template.frequency === "daily" || (weekday === template.weekday &&
+    if ((template.frequency === "daily" && (template.weekdays || [0,1,2,3,4,5,6]).includes(weekday)) || (template.frequency !== "daily" && weekday === template.weekday &&
         Math.floor((Date.parse(`${day}T12:00:00Z`) - Date.parse(`${template.anchor_date}T12:00:00Z`)) / 604800000) % template.interval_weeks === 0))
       dates.push(day);
   }
@@ -1269,7 +1274,7 @@ function renderRecurrenceWeek() {
   const week = $("recurrence-week"), today = localDate(now());
   const minutes = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
   const days = Array.from({length: 7}, (_, weekday) => recurrenceLayout(
-    templates.filter(t => t.frequency === "daily" || t.weekday === weekday)));
+    templates.filter(t => t.frequency === "daily" ? (t.weekdays || [0,1,2,3,4,5,6]).includes(weekday) : t.weekday === weekday)));
   const start = Math.floor(Math.min(minutes(state.preferences.day_start),
     ...days.flat().map(item => item.start)) / 60) * 60;
   const end = Math.ceil(Math.max(minutes(state.preferences.day_end),
@@ -1300,7 +1305,7 @@ function renderRecurrenceWeek() {
     for (const item of days[weekday]) {
       const t = item.template, dates = recurrenceMonthDates(t, today);
       const cadence = t.frequency === "daily" ? "Daily" : t.interval_weeks === 1 ? "Weekly" : `Every ${t.interval_weeks} weeks`;
-      const monthDates = !dates.length ? "No dates this month" : t.frequency === "daily" ? "Every day" :
+      const monthDates = !dates.length ? "No dates this month" : t.frequency === "daily" ? (t.weekdays || [0,1,2,3,4,5,6]).map(day=>weekdayNames[day].slice(0,3)).join(", ") :
         `${dateLabel(month(today), {month: "short"})} ${dates.map(date => Number(date.slice(-2))).join(", ")}`;
       const card = button("", `recurrence-card ${t.kind}`, () => editRecurrence(t),
         `Edit ${t.title} · ${name} · ${t.start}–${t.end} · ${cadence}`);
@@ -1361,10 +1366,12 @@ function editRecurrence(t) {
     ["anchor", "anchor_date"],
   ])
     $(`repeat-${field}`).value = t[key];
+  makeWeekdays($("repeat-weekdays"),t.weekdays || [0,1,2,3,4,5,6]);
   updateRepeatFrequency();
 }
 function updateRepeatFrequency() {
   $("repeat-weekly").hidden = $("repeat-frequency").value === "daily";
+  $("repeat-weekdays").hidden = $("repeat-frequency").value !== "daily";
 }
 $("repeat-frequency").onchange = updateRepeatFrequency;
 $("recurrence-add").onclick = () => {
@@ -1399,6 +1406,7 @@ $("recurrence-form").onsubmit = async (e) => {
       title: $("repeat-title").value,
       kind: $("repeat-kind").value,
       frequency: $("repeat-frequency").value,
+      weekdays: chosenWeekdays($("repeat-weekdays")),
       weekday: Number($("repeat-weekday").value),
       interval_weeks: Number($("repeat-interval").value),
       anchor_date: $("repeat-anchor").value,
@@ -1429,6 +1437,7 @@ async function loadDayNote() {
   savedNotes.set(key, n.text);
   if (selectedDay !== day) return;
   $("day-note").value = drafts.get(key) ?? n.text;
+  paintMarkdown($("day-note"));
   $("day-note-status").textContent = drafts.has(key) ? "Unsaved" : "";
 }
 $("day-note").oninput = () => {
@@ -1469,8 +1478,9 @@ function noteEditor(period, day, summary, title) {
     );
   const heading = el("div", "section-heading");
   heading.append(el("h2", "", title), el("span", "small muted"));
-  renderStats(heading.lastChild, summary);
+  if (period !== "quarter") renderStats(heading.lastChild, summary);
   wrapper.append(heading);
+  if (period !== "day") wrapper.append(goalCard(period,day), el("h3", "notes-label", "Notes"));
   const form = el("form"),
     textarea = el("textarea");
   textarea.rows = 2;
@@ -1496,6 +1506,7 @@ function noteEditor(period, day, summary, title) {
     saveNote(period, day, textarea, status);
   };
   wrapper.append(form);
+  enhanceMarkdown(textarea);
   return wrapper;
 }
 async function changeDay(day) {
@@ -1616,43 +1627,8 @@ function renderCalendar() {
     if (day.completed_tasks?.length || day.goals?.some(t => !t.done)) card.lastChild.prepend(completedTasks(day));
     grid.append(card);
   });
-  for (let i = 0; i < days.length; i += 7)
-    addPeriod(
-      "week",
-      days[i].date,
-      i,
-      7,
-      `Week · ${dateLabel(days[i].date, { month: "short", day: "numeric" })}`,
-    );
-  for (let offset = -1; offset <= 1; offset++) {
-    const first = month(calendarAnchor, offset),
-      next = month(first, 1),
-      index = days.findIndex((d) => d.date === first),
-      length = (Date.parse(next) - Date.parse(first)) / 86400000;
-    addPeriod(
-      "month",
-      first,
-      index,
-      length,
-      dateLabel(first, { month: "long", year: "numeric" }),
-    );
-  }
   resizeEditors();
-}
-function addPeriod(period, day, index, length, title) {
-  if (index < 0) return;
-  const group = el("section", `period-group ${period}`);
-  group.style.gridColumn = `${index + 1} / span ${length}`;
-  group.dataset.period = `${period}:${day}`;
-  group.append(
-    noteEditor(
-      period,
-      day,
-      calendarData.period_summaries[`${period}:${day}`],
-      title,
-    ),
-  );
-  $("calendar-grid").append(group);
+  renderVisiblePeriods(true);
 }
 function updateCalendarWeek() {
   if (!calendarData) return;
@@ -1664,6 +1640,7 @@ function updateCalendarWeek() {
     ),
   );
   calendarWeek = calendarData.days[index].date;
+  renderVisiblePeriods();
   $("calendar-label").textContent =
     `${dateLabel(calendarWeek, { month: "short", day: "numeric" })} – ${dateLabel(shiftDay(calendarWeek, 6), { month: "short", day: "numeric", year: "numeric" })}`;
   renderStats(
@@ -1679,7 +1656,7 @@ function resizeEditors() {
     weekIndex = Math.round(scroll.scrollLeft / (oldStride * 7));
   const gap =
     parseFloat(getComputedStyle(scroll).getPropertyValue("--day-gap")) || 8;
-  calendarDayWidth = (width - gap * 6) / 7;
+  calendarDayWidth = Math.max(160, (width - gap * 6) / 7);
   scroll.style.setProperty("--day-width", `${calendarDayWidth}px`);
   scroll.style.setProperty("--editor-width", `${width - 2}px`);
   scroll.scrollLeft = weekIndex * stride() * 7;
@@ -1785,6 +1762,8 @@ for (const id of ["settings-dialog"])
       setRoute(recurringVisible ? "/recurring" : overviewVisible ? "/overview" : "/");
   });
 async function applyRoute() {
+  if (renderPeriodPlanning()) {planningRouteDeferred=true;return;}
+  planningRouteDeferred=false;
   if (state?.day_plan && !state.day_plan.ready) { renderDayPlan(); return; }
   const path = location.pathname;
   closeRouteDialogs();
@@ -1983,7 +1962,7 @@ async function notifyEnd(s) {
   }
 }
 window.addEventListener("beforeunload", (e) => {
-  if (drafts.size || taskDrafts.size || $("day-plan-goal").value.trim()) {
+  if (drafts.size || taskDrafts.size || goalDrafts.size || $("day-plan-goal").value.trim()) {
     e.preventDefault();
     e.returnValue = "";
   }
@@ -2003,5 +1982,6 @@ setInterval(tick, 250);
 setInterval(() => {
   if (!document.hidden && !busy) refresh().catch(showError);
 }, 15000);
+initializePlanning();
 updateNotifications();
 refresh().then(applyRoute).catch(showError);

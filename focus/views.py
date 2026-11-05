@@ -16,8 +16,8 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
-from .models import Allocation, Block, BlockTemplate, DayHours, DayPlan, LoginAttempt, Note, PushSubscription, Session, Task
-from . import push
+from .models import Allocation, Block, BlockTemplate, DayHours, DayPlan, LoginAttempt, Note, PeriodGoal, PlanningRule, PushSubscription, Session, Task
+from . import push, planning
 from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_template
 from .services import (
     Conflict,
@@ -73,6 +73,7 @@ def api(methods):
                     freeze_elapsed(request.user, prefs, today)
                     materialize(request.user, today, today + timedelta(days=1), today)
                     active = settle(request.user, prefs, now)
+                    planning.ensure_reservations(request.user, prefs, now)
                     return fn(request, data, prefs, now, active, *args, **kwargs)
             except Conflict as error:
                 return JsonResponse({"error": str(error)}, status=409)
@@ -83,6 +84,8 @@ def api(methods):
                 Session.DoesNotExist,
                 Block.DoesNotExist,
                 BlockTemplate.DoesNotExist,
+                PeriodGoal.DoesNotExist,
+                PlanningRule.DoesNotExist,
             ):
                 return JsonResponse({"error": "Item not found."}, status=404)
             except IntegrityError:
@@ -124,13 +127,7 @@ def clock(value):
 
 
 def period_date(period, day):
-    if period == "day":
-        return day
-    if period == "week":
-        return day - timedelta(days=day.weekday())
-    if period == "month":
-        return day.replace(day=1)
-    raise ValueError("Choose day, week, or month.")
+    return planning.period_date(period, day)
 
 
 class ThrottledLoginView(LoginView):
@@ -203,7 +200,7 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=
     if blocks is None:
         materialize(user, day, day + timedelta(days=int(prefs.day_rollover != time(0))), calendar_day(prefs, now))
         blocks = list(Block.objects.filter(user=user, date__range=(day, day + timedelta(days=1)),
-                                           deleted=False).prefetch_related("session_set"))
+                                           deleted=False).select_related("goal_plan").prefetch_related("session_set"))
     blocks = [b for b in blocks if local_day(prefs, block_bounds(b, prefs)[0]) == day
               and not any(s.status != "cancelled" and s.date != day for s in b.session_set.all())]
     if completed_tasks is None:
@@ -294,6 +291,7 @@ def state(request, data, prefs, now, active):
             },
             "tasks": tasks,
             "day_plan": day_plan,
+            "planning": planning.snapshot(request.user, prefs, now),
             "live_block": live_block,
             "next_seconds": next_seconds,
             "next_requested": prefs.next_focus_seconds or prefs.focus_minutes * 60,
@@ -314,13 +312,14 @@ def history(request, data, prefs, now, active):
     if not 0 <= (end - start).days <= 111:
         raise ValueError("Load at most 112 days at a time.")
     materialize(request.user, start, end + timedelta(days=int(prefs.day_rollover != time(0))), calendar_day(prefs, now))
+    planning.ensure_reservations(request.user, prefs, now, start, end)
     sessions = list(
         Session.objects.filter(user=request.user, date__range=(start, end))
         .exclude(status="cancelled")
         .prefetch_related("allocations")
     )
     blocks = list(Block.objects.filter(user=request.user,
-        date__range=(start, end + timedelta(days=1)), deleted=False).prefetch_related("session_set"))
+        date__range=(start, end + timedelta(days=1)), deleted=False).select_related("goal_plan").prefetch_related("session_set"))
     blocks_by_day = {}
     for block in blocks:
         day = local_day(prefs, block_bounds(block, prefs)[0])
@@ -337,7 +336,8 @@ def history(request, data, prefs, now, active):
     hours_by_day = {h.date: h for h in DayHours.objects.filter(user=request.user, date__range=(start, end))}
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     note_rows = list(
-        Note.objects.filter(user=request.user, date__range=(start.replace(day=1), end))
+        Note.objects.filter(user=request.user).filter(
+            Q(date__range=(start.replace(day=1), end)) | Q(period="quarter", date__range=(period_date("quarter", start), end)))
     )
     period_summaries = {}
     for session in sessions:
@@ -362,6 +362,8 @@ def history(request, data, prefs, now, active):
             ],
             "summary": summary(sessions),
             "notes": {f"{n.period}:{n.date}": n.text for n in note_rows},
+            "period_goals": {f"{g.period}:{g.date}": g.text for g in PeriodGoal.objects.filter(
+                user=request.user, date__range=(period_date("quarter", start), end))},
             "period_summaries": {key: summary(rows) for key, rows in period_summaries.items()},
             "previous": (start - timedelta(days=7)).isoformat(),
             "next": (end + timedelta(days=1)).isoformat(),
@@ -563,7 +565,7 @@ def timer(request, data, prefs, now, active):
         start_break(request.user, prefs, now)
         return JsonResponse({"ok": True})
     if action == "set_topic":
-        if not active or active.kind != "focus":
+        if not active or active.kind != "focus" or (active.block_id and active.block.kind == "planning"):
             raise Conflict("Start a focus timer before changing its topic.")
         close_task_span(active, now)
         choose_topic(active, prefs, now, data.get("topic"))
@@ -619,8 +621,8 @@ def timer(request, data, prefs, now, active):
     if not active or data.get("id") != active.id:
         raise Conflict("The timer changed. Refresh and try again.")
     if action == "pause":
-        if active.kind == "meeting":
-            raise Conflict("Meetings run until their scheduled end. Finish early if you leave.")
+        if active.kind == "meeting" or (active.block_id and active.block.kind == "planning"):
+            raise Conflict("Reserved timers run until their scheduled end. Finish early if needed.")
         if active.status != "running":
             raise Conflict("This timer is already paused.")
         elapsed = min(
@@ -730,7 +732,15 @@ def block_save(request, data, prefs, now, active, pk=None):
         else Block(user=request.user)
     )
     if pk and block.session_set.exclude(status="cancelled").exists():
-        raise Conflict("A tracked meeting cannot be rescheduled or deleted.")
+        raise Conflict("A tracked reservation cannot be rescheduled or deleted.")
+    if block.goal_plan_id:
+        if data.get("action") != "delete":
+            raise Conflict("Use the planning dialog to change this reservation.")
+        block.goal_plan.reservation_skipped = True
+        block.goal_plan.save(update_fields=["reservation_skipped"])
+        block.deleted = True
+        block.save(update_fields=["deleted"])
+        return JsonResponse({"ok": True})
     if data.get("action") == "delete":
         if not pk:
             raise ValueError("Choose a block to delete.")
@@ -787,6 +797,7 @@ def block_save(request, data, prefs, now, active, pk=None):
             end=block.end,
             weekday=block.date.weekday(),
             frequency=repeat.get("frequency", "weekly"),
+            weekdays=planning.weekdays(repeat.get("weekdays", list(range(7)))) if repeat.get("frequency") == "daily" else list(range(7)),
             interval_weeks=integer(repeat, "interval_weeks", 1, 12),
             anchor_date=block.date,
             effective_from=max(block.date, calendar_day(prefs, now) + timedelta(days=1)),
@@ -821,6 +832,7 @@ def recurrences(request, data, prefs, now, active, pk=None):
             template.kind = data["kind"]
             template.start, template.end = clock(data["start"]), clock(data["end"])
             template.frequency = data.get("frequency", "weekly")
+            template.weekdays = planning.weekdays(data.get("weekdays", template.weekdays or list(range(7)))) if template.frequency == "daily" else list(range(7))
             template.weekday = integer(data, "weekday", 0, 6)
             template.interval_weeks = integer(data, "interval_weeks", 1, 12)
             template.anchor_date = parse_day(data["anchor_date"])
@@ -859,6 +871,7 @@ def recurrences(request, data, prefs, now, active, pk=None):
                     "end": str(t.end)[:5],
                     "weekday": t.weekday,
                     "frequency": t.frequency,
+                    "weekdays": t.weekdays,
                     "interval_weeks": t.interval_weeks,
                     "anchor_date": t.anchor_date.isoformat(),
                     "effective_from": t.effective_from.isoformat(),
@@ -870,6 +883,75 @@ def recurrences(request, data, prefs, now, active, pk=None):
             ]
         }
     )
+
+
+@api(["GET", "POST"])
+def period_goals(request, data, prefs, now, active):
+    source = request.GET if request.method == "GET" else data
+    period = source.get("period")
+    if period not in planning.PERIODS:
+        raise ValueError("Choose week, month, or quarter goals.")
+    day = period_date(period, parse_day(source["date"]))
+    if request.method == "POST":
+        goal, _ = PeriodGoal.objects.get_or_create(user=request.user, period=period, date=day)
+        action = data.get("action", "save")
+        if action == "save":
+            value = text(data, "text", 10000)
+            if not value:
+                raise ValueError("Enter goals before saving, or choose Later.")
+            goal.text = value
+            goal.save(update_fields=["text", "updated_at"])
+        elif action == "reserve":
+            block_day = parse_day(data["reservation_date"])
+            start = instant(block_day, clock(data["start"]), prefs)
+            if start < now:
+                raise ValueError("Choose a future time for the planning pomo.")
+            minutes = integer(data, "minutes", 1, 180)
+            planning.book(goal, prefs, start, start + timedelta(minutes=minutes))
+            goal.reservation_skipped = False
+            goal.reservation_needs_choice = False
+            goal.save(update_fields=["reservation_skipped", "reservation_needs_choice"])
+        elif action == "remove_reservation":
+            block = Block.objects.filter(goal_plan=goal, deleted=False).first()
+            if block and block.session_set.exclude(status="cancelled").exists():
+                raise Conflict("This planning pomo has already been tracked.")
+            if block:
+                block.deleted = True
+                block.save(update_fields=["deleted"])
+            goal.reservation_skipped = True
+            goal.save(update_fields=["reservation_skipped"])
+        else:
+            raise ValueError("Unknown planning action.")
+    return JsonResponse(planning.goal_detail(request.user, prefs, now, period, day))
+
+
+@api(["GET", "POST"])
+def planning_settings(request, data, prefs, now, active):
+    if request.method == "POST":
+        workdays = planning.weekdays(data.get("workdays"))
+        rules = data.get("rules")
+        if not isinstance(rules, list) or len(rules) != 3 or {r.get("period") for r in rules if isinstance(r, dict)} != set(planning.PERIODS):
+            raise ValueError("Configure one rule each for week, month, and quarter.")
+        for row in rules:
+            if type(row.get("enabled")) is not bool or row.get("trigger_mode") not in ["last_workday", "day"]:
+                raise ValueError("Choose whether and when advance planning is enabled.")
+            values = {"enabled": row["enabled"], "weekday": integer(row, "weekday", 0, 6),
+                      "trigger_mode": row["trigger_mode"], "day_of_month": integer(row, "day_of_month", 1, 31),
+                      "time": clock(row["time"]), "minutes": integer(row, "minutes", 1, 180)}
+            PlanningRule.objects.update_or_create(user=request.user, period=row["period"], defaults=values)
+        prefs.planning_workdays = workdays
+        prefs.save(update_fields=["planning_workdays"])
+        for block in Block.objects.filter(user=request.user, kind="planning", planning_auto=True, deleted=False,
+                                          date__gte=calendar_day(prefs, now)):
+            if block_bounds(block, prefs)[0] >= now and not block.session_set.exclude(status="cancelled").exists():
+                block.deleted = True
+                block.save(update_fields=["deleted"])
+        PeriodGoal.objects.filter(user=request.user, date__gte=period_date("quarter", local_day(prefs, now))).update(reservation_needs_choice=False)
+        planning.ensure_reservations(request.user, prefs, now)
+    return JsonResponse({"workdays": prefs.planning_workdays, "rules": [
+        {"period": period, "enabled": rule.enabled, "weekday": rule.weekday, "trigger_mode": rule.trigger_mode,
+         "day_of_month": rule.day_of_month, "time": str(rule.time)[:5], "minutes": rule.minutes}
+        for period in ["week", "month", "quarter"] for rule in [planning.rule_for(request.user, period)]]})
 
 
 @api(["GET", "POST"])

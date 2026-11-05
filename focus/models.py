@@ -6,6 +6,14 @@ from django.db.models import Q
 from django.utils import timezone
 
 
+def workdays_default():
+    return [0, 1, 2, 3, 4]
+
+
+def weekdays_default():
+    return list(range(7))
+
+
 class Preferences(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     timezone = models.CharField(max_length=64, default="Europe/Brussels")
@@ -21,6 +29,7 @@ class Preferences(models.Model):
     auto_focus = models.BooleanField(default=False)
     auto_break = models.BooleanField(default=True)
     auto_armed = models.BooleanField(default=False)
+    planning_workdays = models.JSONField(default=workdays_default)
 
 
 class BlockTemplate(models.Model):
@@ -31,6 +40,7 @@ class BlockTemplate(models.Model):
     start = models.TimeField()
     end = models.TimeField()
     weekday = models.PositiveSmallIntegerField()
+    weekdays = models.JSONField(default=weekdays_default)
     frequency = models.CharField(
         max_length=6, choices=[("daily", "Daily"), ("weekly", "Weekly")], default="weekly"
     )
@@ -99,14 +109,43 @@ class DayHours(models.Model):
         ]
 
 
+class PeriodGoal(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    period = models.CharField(max_length=7, choices=[("week", "Week"), ("month", "Month"), ("quarter", "Quarter")])
+    date = models.DateField()
+    text = models.TextField(max_length=10000, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reservation_skipped = models.BooleanField(default=False)
+    reservation_needs_choice = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "period", "date"], name="one_period_goal")]
+
+
+class PlanningRule(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    period = models.CharField(max_length=7, choices=[("week", "Week"), ("month", "Month"), ("quarter", "Quarter")])
+    enabled = models.BooleanField(default=False)
+    weekday = models.PositiveSmallIntegerField(default=4)
+    trigger_mode = models.CharField(max_length=16, default="last_workday")
+    day_of_month = models.PositiveSmallIntegerField(default=31)
+    time = models.TimeField(default=time(17))
+    minutes = models.PositiveSmallIntegerField(default=25)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["user", "period"], name="one_planning_rule")]
+
+
 class Block(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     date = models.DateField()
     timezone = models.CharField(max_length=64, default="Europe/Brussels")
     start = models.TimeField()
     end = models.TimeField()
-    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("work", "Work"), ("break", "Break")])
+    kind = models.CharField(max_length=8, choices=[("meeting", "Meeting"), ("work", "Work"), ("break", "Break"), ("planning", "Planning")])
     title = models.CharField(max_length=200)
+    goal_plan = models.OneToOneField(PeriodGoal, null=True, blank=True, on_delete=models.SET_NULL, related_name="reservation")
+    planning_auto = models.BooleanField(default=False)
     template = models.ForeignKey(BlockTemplate, null=True, blank=True, on_delete=models.SET_NULL)
     occurrence_date = models.DateField(null=True, blank=True)
     fixed = models.BooleanField(default=True)
@@ -201,7 +240,7 @@ class Allocation(models.Model):
 class Note(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     period = models.CharField(
-        max_length=5, choices=[("day", "Day"), ("week", "Week"), ("month", "Month")]
+        max_length=7, choices=[("day", "Day"), ("week", "Week"), ("month", "Month"), ("quarter", "Quarter")]
     )
     date = models.DateField()
     text = models.TextField(max_length=10000, blank=True)
