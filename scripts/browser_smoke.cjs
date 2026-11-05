@@ -619,8 +619,8 @@ fs.mkdirSync("test-results", { recursive: true });
         };
       });
       assert(
-        Math.abs(calendar.weekWidth - calendar.viewport) < 1,
-        `Seven days fill viewport: ${JSON.stringify(calendar)}`,
+        Math.abs(calendar.weekWidth - Math.max(calendar.viewport, 160 * 7 + 8 * 6)) < 1,
+        `Seven readable days fill or scroll beyond viewport: ${JSON.stringify(calendar)}`,
       );
       assert(
         calendar.pageHeight <= calendar.height + 1,

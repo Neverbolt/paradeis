@@ -1656,7 +1656,7 @@ function resizeEditors() {
     weekIndex = Math.round(scroll.scrollLeft / (oldStride * 7));
   const gap =
     parseFloat(getComputedStyle(scroll).getPropertyValue("--day-gap")) || 8;
-  calendarDayWidth = (width - gap * 6) / 7;
+  calendarDayWidth = Math.max(160, (width - gap * 6) / 7);
   scroll.style.setProperty("--day-width", `${calendarDayWidth}px`);
   scroll.style.setProperty("--editor-width", `${width - 2}px`);
   scroll.scrollLeft = weekIndex * stride() * 7;
