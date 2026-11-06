@@ -640,7 +640,7 @@ function renderDayCalendar(container, day) {
   // Align the ruler to local whole hours, including half-hour time zones.
   const start = earliest - Number(clock(earliest).slice(3)) * 60000 - earliest % 60000;
   const end = start + Math.max(60, Math.ceil((latest - start) / 3600000) * 60) * 60000;
-  const scale = 2, position = time => (Date.parse(time) - start) / 60000 * scale;
+  const scale = 3, position = time => (Date.parse(time) - start) / 60000 * scale;
   const canvas = el("div", "day-calendar-canvas");
   canvas.style.height = `${(end - start) / 60000 * scale + 32}px`;
   canvas.style.setProperty("--calendar-hour", `${60 * scale}px`);
@@ -660,7 +660,8 @@ function renderDayCalendar(container, day) {
     band.append(el("span", "", `Work · ${work.title}`));
     canvas.append(band);
   }
-  const items = all.map(item => ({item, start: Date.parse(item.start), end: Math.max(Date.parse(item.end), Date.parse(item.start) + 60000)}));
+  // Tiny entries need one readable line. Include that footprint in overlap lanes.
+  const items = all.map(item => ({item, start: Date.parse(item.start), end: Math.max(Date.parse(item.end), Date.parse(item.start) + 5 * 60000)}));
   let cluster = [], lanes = [], stop = -Infinity;
   const finish = () => cluster.forEach(item => item.columns = lanes.length);
   for (const item of items) {
@@ -678,9 +679,22 @@ function renderDayCalendar(container, day) {
     row.style.setProperty("--event-lane", lane);
     row.style.setProperty("--event-columns", columns);
     const card = timelineCard(item);
-    card.title = `${clock(item.start)}–${clock(item.end)} · ${item.title || item.kind}`;
-    card.prepend(el("span", "day-calendar-range", `${clock(item.start)}–${clock(item.end)}`));
-    if (itemEnd - itemStart < 15 * 60000) row.classList.add("brief");
+    const labels = [item.title || item.kind, `${clock(item.start)}–${clock(item.end)}`,
+      ...(item.allocations || []).map(a => a.label), item.reflection].filter(Boolean);
+    card.title = labels.join(" · ");
+    card.setAttribute("aria-label", labels.join(" · "));
+    if (card.tagName !== "BUTTON") card.tabIndex = 0;
+    // Calendar cards keep the topic and exact range; stacked compact-view
+    // metadata (including redundant duration) cannot fit short time slots.
+    card.querySelector(".allocation-chips")?.remove();
+    const metrics = card.querySelector(".session-metrics") || card.querySelector(".item-meta > .sand-pile");
+    card.querySelector(".item-meta")?.remove();
+    if (metrics) { card.classList.add("has-session-metrics"); card.append(metrics); }
+    card.append(el("span", "day-calendar-range", `${clock(item.start)}–${clock(item.end)}`));
+    const minutes = (itemEnd - itemStart) / 60000;
+    if (minutes < 12) row.classList.add("brief");
+    else if (minutes < 20) row.classList.add("short");
+    else if (minutes >= 35) row.classList.add("roomy");
     if (item.type === "plan" && item.kind === "break") row.classList.add("calendar-break");
     row.append(card); canvas.append(row);
   }

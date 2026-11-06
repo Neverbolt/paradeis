@@ -110,11 +110,11 @@ function checkWorkWrappingUI(w) {
   const events = [...calendar.querySelectorAll('.day-calendar-event')];
   assert.equal(events.length, 6);
   for (const event of events) {
-    assert(Math.abs(parseFloat(event.style.height) - (Date.parse(event.dataset.end) - Date.parse(event.dataset.start)) / 30000) < .01);
+    assert(Math.abs(parseFloat(event.style.height) - Math.max(5, (Date.parse(event.dataset.end) - Date.parse(event.dataset.start)) / 60000) * 3) < .01);
   }
   const before = events.find(event => event.textContent.includes('Before Work'));
   const after = events.find(event => event.textContent.includes('After Work'));
-  assert(Math.abs(parseFloat(after.style.top) - parseFloat(before.style.top) - 210) < .01);
+  assert(Math.abs(parseFloat(after.style.top) - parseFloat(before.style.top) - 315) < .01);
   assert.equal(calendar.querySelectorAll('.day-calendar-work').length, 3);
   assert.equal(calendar.querySelectorAll('.day-calendar-boundary').length, 2);
   calendar.scrollTop = 200;
