@@ -817,7 +817,7 @@ fs.mkdirSync("test-results", { recursive: true });
       assert.equal(await page.locator("#timer-main").textContent(), "Start break");
       assert.equal(await page.locator('#app-favicon').getAttribute('data-mode'),'break');
       const breakIcon=await page.locator('#app-favicon').getAttribute('href');
-      assert.equal((await page.request.get(breakIcon)).status(),200);
+      assert.equal((await page.request.get(new URL(breakIcon, base).href)).status(),200);
       await page.locator("#timer-main").click();
       await waitFor(() => !busy && document.querySelector("#timer-main").textContent === "Skip break");
       assert.equal(await page.locator('#app-favicon').getAttribute('href'),breakIcon);
