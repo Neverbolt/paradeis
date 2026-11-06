@@ -80,6 +80,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector('#timeline.day-calendar .day-calendar-canvas');
     await page.reload();
     await page.waitForSelector('#timeline.day-calendar .day-calendar-canvas');
+    await page.waitForLoadState('networkidle');
     assert.equal(await page.locator('#timeline-calendar').getAttribute('aria-pressed'), 'true');
     await page.evaluate(() => {
       const start = Date.parse(state.day.workday.start), at = minutes => new Date(start + minutes * 60000).toISOString();
