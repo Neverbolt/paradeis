@@ -527,7 +527,7 @@ function entries(day) {
     ...day.blocks
       .filter((b) => b.kind !== "work" && !tracked.has(b.id))
       .map((b) => ({ ...b, type: "block" })),
-    ...day.plan.map((p) => ({ ...p, type: "plan", title: p.title || "Focus" })),
+    ...day.plan.map((p) => ({ ...p, type: "plan", title: p.title || (p.kind === "break" ? "Break" : "Focus") })),
   ].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
 }
 function timelineCard(item) {
@@ -620,7 +620,100 @@ function dayBoundary(day, field) {
   return marker;
 }
 
+function dayTimelineMode() {
+  return localStorage.getItem("day-timeline-layout") === "calendar" ? "calendar" : "compact";
+}
+for (const mode of ["compact", "calendar"]) $(`timeline-${mode}`).onclick = () => {
+  localStorage.setItem("day-timeline-layout", mode);
+  $("timeline").dataset.calendarDay = "";
+  renderTimeline($("timeline"), state.day);
+};
+function renderDayCalendar(container, day) {
+  const previousScroll = container.scrollTop, firstVisit = container.dataset.calendarDay !== day.date;
+  container.replaceChildren();
+  container.dataset.calendarDay = day.date;
+  const all = entries(day), works = day.blocks.filter(item => item.kind === "work");
+  const bounds = [...all, ...works, ...(day.workday ? [day.workday] : [])];
+  const earliest = Math.min(...bounds.map(item => Date.parse(item.start)));
+  const latest = Math.max(...bounds.map(item => Date.parse(item.end)));
+  if (!Number.isFinite(earliest) || !Number.isFinite(latest)) return;
+  // Align the ruler to local whole hours, including half-hour time zones.
+  const start = earliest - Number(clock(earliest).slice(3)) * 60000 - earliest % 60000;
+  const end = start + Math.max(60, Math.ceil((latest - start) / 3600000) * 60) * 60000;
+  const scale = 2, position = time => (Date.parse(time) - start) / 60000 * scale;
+  const canvas = el("div", "day-calendar-canvas");
+  canvas.style.height = `${(end - start) / 60000 * scale + 32}px`;
+  canvas.style.setProperty("--calendar-hour", `${60 * scale}px`);
+  canvas.classList.toggle("has-work", works.length > 0);
+  for (let time = start; time <= end; time += 3600000) {
+    const hour = el("div", "day-calendar-hour");
+    hour.style.top = `${position(new Date(time).toISOString())}px`;
+    hour.append(el("span", "", clock(time)));
+    canvas.append(hour);
+  }
+  for (const work of works) {
+    const band = button("", "day-calendar-work", () => openBlock(work),
+      `Edit Work reservation ${work.title}, ${clock(work.start)}–${clock(work.end)}`);
+    band.style.top = `${position(work.start)}px`;
+    band.style.height = `${Math.max(1, position(work.end) - position(work.start))}px`;
+    band.title = `Work · ${work.title} · ${clock(work.start)}–${clock(work.end)}`;
+    band.append(el("span", "", `Work · ${work.title}`));
+    canvas.append(band);
+  }
+  const items = all.map(item => ({item, start: Date.parse(item.start), end: Math.max(Date.parse(item.end), Date.parse(item.start) + 60000)}));
+  let cluster = [], lanes = [], stop = -Infinity;
+  const finish = () => cluster.forEach(item => item.columns = lanes.length);
+  for (const item of items) {
+    if (item.start >= stop) { finish(); cluster = []; lanes = []; stop = -Infinity; }
+    let lane = lanes.findIndex(end => end <= item.start);
+    if (lane < 0) lane = lanes.length;
+    lanes[lane] = item.end; item.lane = lane; cluster.push(item); stop = Math.max(stop, item.end);
+  }
+  finish();
+  for (const {item, start: itemStart, end: itemEnd, lane, columns} of items) {
+    const row = el("div", "day-calendar-event");
+    row.dataset.start = item.start; row.dataset.end = item.end;
+    row.style.top = `${position(item.start)}px`;
+    row.style.height = `${(itemEnd - itemStart) / 60000 * scale}px`;
+    row.style.setProperty("--event-lane", lane);
+    row.style.setProperty("--event-columns", columns);
+    const card = timelineCard(item);
+    card.title = `${clock(item.start)}–${clock(item.end)} · ${item.title || item.kind}`;
+    card.prepend(el("span", "day-calendar-range", `${clock(item.start)}–${clock(item.end)}`));
+    if (itemEnd - itemStart < 15 * 60000) row.classList.add("brief");
+    if (item.type === "plan" && item.kind === "break") row.classList.add("calendar-break");
+    row.append(card); canvas.append(row);
+  }
+  if (day.workday) for (const field of ["start", "end"]) {
+    const marker = dayBoundary(day, field);
+    marker.classList.add("day-calendar-boundary");
+    marker.querySelector(".timeline-end-label").textContent = `${field === "start" ? "Start" : "End"} · ${day.workday[`${field}_time`]}`;
+    marker.style.top = `${position(day.workday[field])}px`;
+    canvas.append(marker);
+  }
+  if (day.date === state.today && now() >= start && now() <= end) {
+    const marker = el("div", "now-marker day-calendar-now", `Now · ${clock(now())}`);
+    marker.style.top = `${(now() - start) / 60000 * scale}px`;
+    marker.setAttribute("aria-label", `Current time ${clock(now())}`);
+    canvas.append(marker);
+  }
+  container.append(canvas);
+  container.scrollTop = firstVisit ? 0 : previousScroll;
+  // Refreshes preserve manual scrolling, so gaps can be inspected undisturbed.
+  if (firstVisit && day.date === state.today) requestAnimationFrame(() => {
+    const marker = canvas.querySelector(".day-calendar-now");
+    if (marker && canvas.isConnected) container.scrollTop = Math.max(0, parseFloat(marker.style.top) - container.clientHeight / 3);
+  });
+}
 function renderTimeline(container, day) {
+  if (container.id === "timeline") {
+    const calendar = dayTimelineMode() === "calendar";
+    $("timeline-compact").setAttribute("aria-pressed", String(!calendar));
+    $("timeline-calendar").setAttribute("aria-pressed", String(calendar));
+    container.classList.toggle("day-calendar", calendar);
+    if (calendar) { renderDayCalendar(container, day); return; }
+    delete container.dataset.calendarDay;
+  }
   const previousScroll = container.scrollTop;
   container.replaceChildren();
   const works = day.blocks.filter(b => b.kind === "work")

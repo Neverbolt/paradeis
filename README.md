@@ -48,6 +48,8 @@ SQLite defaults to `db.sqlite3`. Use `DATABASE_PATH` to select another file. Set
 
 ## Goals and planning
 
+The dashboard timeline has Compact and Full day layouts. Full day uses an hourly calendar scale over the configured workday, extending to include entries outside those hours. Sessions and blocks have proportional heights; gaps remain visible, overlapping entries share columns, and Work reservations have dashed backdrops. Start/End still edit that day's hours. The choice is remembered in this browser; refreshes preserve manual scrolling in Full day.
+
 Weekly, monthly, and calendar-quarter goals are separate from notes. The first visit with an empty current-period goal opens planning (quarter → month → week), before the daily task chooser. Later defers the prompt for this visit; it returns on another visit until goals are saved. Daily planning shows weekly goals; weekly planning shows the monthly and quarterly goals covering that week, including both sides of a month/quarter boundary; monthly planning shows quarterly goals. Each period editor also shows its previous period's goals as read-only context.
 
 The overview keeps the visible week's goal/notes panels outside the horizontally scrolling day grid. Weeks spanning a month or quarter boundary show both relevant periods, so a Sunday month start cannot push the prior editor off-screen. Goals stay read-only there; Edit reopens the original planning dialog. Notes remain directly editable, including new quarter notes. `*italic*`, `**bold**`, inline backticks, and heading markers get light source-preserving styling: formatting characters remain visible, and HTML is always treated as text. Ctrl/Cmd+Enter saves textarea forms.
