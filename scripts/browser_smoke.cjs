@@ -102,8 +102,8 @@ fs.mkdirSync("test-results", { recursive: true });
         return {duration:first.getBoundingClientRect().height, gap:last.getBoundingClientRect().top-first.getBoundingClientRect().top,
           left:canvas.left,right:canvas.right,width:innerWidth};
       });
-      assert(Math.abs(layout.duration-50)<1, '25 minutes gets 50px');
-      assert(Math.abs(layout.gap-240)<1, 'Two hours retains its full calendar distance');
+      assert(Math.abs(layout.duration-75)<1, '25 minutes gets 75px');
+      assert(Math.abs(layout.gap-360)<1, 'Two hours retains its full calendar distance');
       assert(layout.left>=0&&layout.right<=layout.width+1);
       await page.screenshot({path:`test-results/full-day-calendar-${width}.png`});
     }
@@ -112,6 +112,52 @@ fs.mkdirSync("test-results", { recursive: true });
       renderTimeline(timeline,fullDayFixture);
       if(timeline.scrollTop!==150)throw Error('Full day lost manual scroll position');
     });
+    await page.evaluate(() => {
+      const start=Date.parse(state.day.workday.start), at=minutes=>new Date(start+minutes*60000).toISOString();
+      const item=(id,title,from,to,extra={})=>({id,title,start:at(from),end:at(to),kind:'focus',...extra});
+      window.denseDayFixture={...state.day,blocks:[
+        item(9101,'Strategy and preparation',0,180,{kind:'work'}),
+        item(9102,'Meeting with a long name that needs to wrap within its calendar block',0,15,{kind:'meeting'}),
+        item(9103,'A one-minute event',180,181,{kind:'meeting'}),
+        item(9104,'Another short event',181,182,{kind:'meeting'})],
+        sessions:[item(9105,'Research and preparation with a longer topic across several tasks',15,40,
+          {status:'completed',elapsed:1500,effort:4,focus_score:3,allocations:[{label:'Read source material',sand:2},{label:'Write detailed notes',sand:2}]}),
+          item(9106,'A completed focus with more than one line of text',90,115,{status:'completed',elapsed:1500,effort:3,focus_score:2})],
+        plan:[item(9110,'Break',40,45,{kind:'break'}),item(9111,'Focus',45,70),item(9112,'Break',70,75,{kind:'break'}),
+          item(9113,'Break',75,90,{kind:'break'}),item(9114,'Break',115,120,{kind:'break'}),
+          item(9115,'A much longer planned focus topic that needs to wrap',120,145),item(9116,'Break',145,150,{kind:'break'}),
+          item(9117,'Focus',150,175),item(9118,'Break',175,180,{kind:'break'})]};
+      renderTimeline(document.querySelector('#timeline'),denseDayFixture);
+      document.querySelector('#timeline').scrollTop=0;
+    });
+    for(const width of [1280,720,390]) {
+      await page.setViewportSize({width,height:width===390?844:900});
+      const clipping=await page.evaluate(()=>[...document.querySelectorAll('#timeline .day-calendar-event')].flatMap(event=>{
+        const card=event.querySelector('.timeline-item'), bounds=card.getBoundingClientRect();
+        return [...card.querySelectorAll('p,.day-calendar-range,.session-metrics,.sand-pile')].filter(node=>{
+          const style=getComputedStyle(node);if(style.display==='none'||!node.getClientRects().length)return false;
+          const box=node.getBoundingClientRect();return box.height>0&&(box.top<bounds.top+.5||box.bottom>bounds.bottom-.5||box.left<bounds.left+.5||box.right>bounds.right-.5);
+        }).map(node=>({title:card.title,tag:node.className||node.tagName,cardHeight:bounds.height,contentHeight:node.getBoundingClientRect().height}));
+      }));
+      assert.deepEqual(clipping,[],`Calendar text and metrics fit at ${width}px: ${JSON.stringify(clipping)}`);
+      const collisions=await page.evaluate(()=>{
+        const visible=node=>getComputedStyle(node).visibility!=='hidden'&&node.getClientRects().length;
+        const labels=[...document.querySelectorAll('#timeline .day-calendar-boundary .timeline-end-label,#timeline .day-calendar-now')].filter(visible);
+        const text=[...document.querySelectorAll('#timeline .day-calendar-event p,#timeline .day-calendar-hour > span')].filter(visible);
+        return labels.flatMap(label=>text.filter(node=>{
+          const a=label.getBoundingClientRect(),b=node.getBoundingClientRect();
+          // The Now line may cross an event; its text stays in the time gutter.
+          if(label.classList.contains('day-calendar-now')&&node.matches('.day-calendar-event p'))return false;
+          return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
+        }).map(node=>`${label.textContent} overlaps ${node.textContent}`));
+      });
+      assert.deepEqual(collisions,[],`Time labels don't cover card text or each other at ${width}px`);
+      assert.equal(await page.locator('#timeline .brief .item-meta').count(),0);
+      await page.screenshot({path:`test-results/full-day-dense-${width}.png`});
+    }
+    await page.locator('#timeline .timeline-start .timeline-end-label').click();
+    assert(await page.locator('#day-hours-dialog').evaluate(dialog=>dialog.open));
+    await page.locator('#day-hours-dialog [data-close]').click();
     await page.locator('#timeline-compact').click();
     assert.equal(await page.locator('#timeline.day-calendar').count(),0);
     await page.setViewportSize({width:1280,height:800});

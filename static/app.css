@@ -498,18 +498,26 @@ select:focus {
 .day-calendar-work {position:absolute; left:47px; right:0; border:1px dashed #9baa8c; border-radius:5px; background:#edf1e64d; text-align:left; overflow:hidden; z-index:0;}
 .day-calendar-work > span {display:block; writing-mode:vertical-rl; max-height:100%; padding:5px 3px; font-size:10px; color:var(--green); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .day-calendar-event {position:absolute; left:calc(var(--event-left) + (100% - var(--event-left)) * var(--event-lane) / var(--event-columns)); width:calc((100% - var(--event-left)) / var(--event-columns)); padding:1px 2px; z-index:1; min-width:0;}
-.day-calendar-event > .timeline-item {height:100%; min-height:0; overflow:hidden; padding:4px 7px; border-radius:4px;}
+.day-calendar-event > .timeline-item {display:flex; flex-direction:column; justify-content:flex-start; gap:2px; position:relative; height:100%; min-height:0; overflow:hidden; padding:4px 7px; border-radius:4px;}
 .day-calendar-event > .timeline-item.has-focus-lenses {min-height:0;}
-.day-calendar-range {display:block; font-size:9px; line-height:12px; color:var(--muted); font-variant-numeric:tabular-nums;}
-.day-calendar-event .timeline-item p {font-size:11px; line-height:14px;}
-.day-calendar-event .item-meta {margin-top:1px;}
-.day-calendar-event.brief .day-calendar-range, .day-calendar-event.brief .item-meta, .day-calendar-event.brief .allocation-chips {display:none;}
-.day-calendar-event.brief > .timeline-item {padding:0 5px;}
+.day-calendar-range {display:block; flex-shrink:0; font-size:9px; line-height:12px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.day-calendar-event .timeline-item p {display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; flex-shrink:0; overflow:hidden; font-size:11px; line-height:14px; overflow-wrap:anywhere;}
+.day-calendar-event.roomy .timeline-item p {-webkit-line-clamp:3;}
+.day-calendar-event.short > .timeline-item {padding:2px 5px; gap:1px;}
+.day-calendar-event.short .timeline-item p {-webkit-line-clamp:1; font-size:10px; line-height:12px;}
+.day-calendar-event.short .day-calendar-range {font-size:9px; line-height:11px;}
+.day-calendar-event.brief > .timeline-item {justify-content:center; padding:0 5px; gap:0;}
+.day-calendar-event.brief .timeline-item p {display:block; white-space:nowrap; text-overflow:ellipsis; font-size:10px; line-height:11px;}
+.day-calendar-event.brief .day-calendar-range, .day-calendar-event.brief .session-metrics, .day-calendar-event.brief .sand-pile, .day-calendar-event.short .session-metrics, .day-calendar-event.short .sand-pile {display:none;}
+.day-calendar-event.brief > .timeline-item.has-session-metrics, .day-calendar-event.short > .timeline-item.has-session-metrics {padding-right:5px;}
+.day-calendar-event > .timeline-item > .sand-pile {position:absolute; bottom:5px; right:7px;}
+.day-calendar-event > .timeline-item:focus-visible {outline:2px solid var(--green); outline-offset:-2px;}
 .day-calendar-event.calendar-break > .timeline-item {background:#f6f2e5; color:var(--muted);}
-.day-calendar-boundary.timeline-boundary {position:absolute; left:0; right:0; z-index:2; margin:0; padding:0; min-height:0; height:18px; transform:translateY(-9px); pointer-events:none; background:transparent;}
+.day-calendar-boundary.timeline-boundary {position:absolute; left:0; right:0; z-index:2; margin:0; padding:0; min-height:0; height:1px; pointer-events:none; background:transparent;}
+.day-calendar-boundary::before {content:""; position:absolute; left:45px; right:0; border-top:1px dashed #9baa8c;}
 .day-calendar-boundary .timeline-time {visibility:hidden;}
-.day-calendar-boundary .timeline-end-label {justify-self:end; padding:2px 5px; border-radius:4px; background:var(--paper, #fafbf7); pointer-events:auto;}
-.day-calendar-boundary .timeline-end-label::before {display:none;}
+.day-calendar-boundary .timeline-end-label {position:absolute; top:0; left:0; width:43px; display:block; padding:0 4px 0 0; transform:translateY(-50%); font-size:9px; line-height:10px; text-align:right; border-radius:4px; background:var(--paper, #fafbf7); pointer-events:auto;}
+.day-calendar-boundary .timeline-end-label::before, .day-calendar-boundary .timeline-end-label::after {display:none;}
 .day-calendar-boundary:focus-visible {outline:2px solid var(--green);}
 .day-calendar-canvas .day-calendar-now {position:absolute; left:0; right:0; z-index:3; margin:0; pointer-events:none; transform:translateY(-50%);}
 .timeline-time {
