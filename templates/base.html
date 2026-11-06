@@ -9,7 +9,7 @@
   <link rel="manifest" href="{% static 'manifest.json' %}">
   <link rel="apple-touch-icon" href="{% static 'app-icon-192.png' %}">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="icon" href="{% static 'icon.svg' %}" type="image/svg+xml">
+  <link id="app-favicon" rel="icon" href="{% static 'icon.svg' %}" data-focus="{% static 'icon.svg' %}" data-break="{% static 'icon-break.svg' %}" data-mode="focus" type="image/svg+xml">
   <link rel="stylesheet" href="{% static 'app.css' %}">
   {% block head %}{% endblock %}
 </head>

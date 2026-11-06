@@ -467,6 +467,15 @@ async function checkSchedulingUI(w) {
     await waitFor(() => $("review-dialog").open && w.eval("!busy"), "finish shortened Work focus");
     $("review-dialog").close();
     assert.equal($("timer-main").textContent, "Start break");
+    assert.equal($("app-favicon").dataset.mode, "break");
+    assert($("app-favicon").href.endsWith('/static/icon-break.svg'));
+    const iconChanges = [];
+    const iconObserver = new w.MutationObserver(records => iconChanges.push(...records));
+    iconObserver.observe($("app-favicon"), {attributes:true, attributeFilter:['href']});
+    w.tick(); w.tick();
+    await Promise.resolve();
+    assert.equal(iconChanges.length, 0, 'Countdown ticks do not rewrite the favicon');
+    iconObserver.disconnect();
     $("timer-main").click();
     await waitFor(() => $("timer-main").textContent === "Skip break" && w.eval("!busy"), "start manual break");
     $("auto-focus").checked = true;
@@ -475,6 +484,8 @@ async function checkSchedulingUI(w) {
     assert.equal((await w.api("state/")).preferences.auto_focus, true);
     $("timer-main").click();
     await waitFor(() => w.eval("!busy && !!state.active"), "automatically start focus after skipping the break");
+    assert.equal($("app-favicon").dataset.mode, "focus");
+    assert($("app-favicon").href.endsWith('/static/icon.svg'));
     assert.equal((await w.api("state/")).active.title, "Strategy");
     $("timer-cancel").click();
     await waitFor(() => w.eval("!busy && !state.active"), "discard stops the automatic cycle");
