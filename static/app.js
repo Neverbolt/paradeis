@@ -648,7 +648,11 @@ function renderDayCalendar(container, day) {
   for (let time = start; time <= end; time += 3600000) {
     const hour = el("div", "day-calendar-hour");
     hour.style.top = `${position(new Date(time).toISOString())}px`;
-    hour.append(el("span", "", clock(time)));
+    const label = el("span", "", clock(time));
+    const markers = day.workday ? [Date.parse(day.workday.start), Date.parse(day.workday.end)] : [];
+    if (day.date === state.today && now() >= start && now() <= end) markers.push(now());
+    if (markers.some(marker => Math.abs(time - marker) / 60000 * scale < 24)) label.style.visibility = "hidden";
+    hour.append(label);
     canvas.append(hour);
   }
   for (const work of works) {

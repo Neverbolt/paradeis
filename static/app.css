@@ -513,10 +513,11 @@ select:focus {
 .day-calendar-event > .timeline-item > .sand-pile {position:absolute; bottom:5px; right:7px;}
 .day-calendar-event > .timeline-item:focus-visible {outline:2px solid var(--green); outline-offset:-2px;}
 .day-calendar-event.calendar-break > .timeline-item {background:#f6f2e5; color:var(--muted);}
-.day-calendar-boundary.timeline-boundary {position:absolute; left:0; right:0; z-index:2; margin:0; padding:0; min-height:0; height:18px; transform:translateY(-9px); pointer-events:none; background:transparent;}
+.day-calendar-boundary.timeline-boundary {position:absolute; left:0; right:0; z-index:2; margin:0; padding:0; min-height:0; height:1px; pointer-events:none; background:transparent;}
+.day-calendar-boundary::before {content:""; position:absolute; left:45px; right:0; border-top:1px dashed #9baa8c;}
 .day-calendar-boundary .timeline-time {visibility:hidden;}
-.day-calendar-boundary .timeline-end-label {justify-self:end; padding:2px 5px; border-radius:4px; background:var(--paper, #fafbf7); pointer-events:auto;}
-.day-calendar-boundary .timeline-end-label::before {display:none;}
+.day-calendar-boundary .timeline-end-label {position:absolute; top:0; left:0; width:43px; display:block; padding:0 4px 0 0; transform:translateY(-50%); font-size:9px; line-height:10px; text-align:right; border-radius:4px; background:var(--paper, #fafbf7); pointer-events:auto;}
+.day-calendar-boundary .timeline-end-label::before, .day-calendar-boundary .timeline-end-label::after {display:none;}
 .day-calendar-boundary:focus-visible {outline:2px solid var(--green);}
 .day-calendar-canvas .day-calendar-now {position:absolute; left:0; right:0; z-index:3; margin:0; pointer-events:none; transform:translateY(-50%);}
 .timeline-time {

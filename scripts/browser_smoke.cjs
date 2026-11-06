@@ -140,9 +140,24 @@ fs.mkdirSync("test-results", { recursive: true });
         }).map(node=>({title:card.title,tag:node.className||node.tagName,cardHeight:bounds.height,contentHeight:node.getBoundingClientRect().height}));
       }));
       assert.deepEqual(clipping,[],`Calendar text and metrics fit at ${width}px: ${JSON.stringify(clipping)}`);
+      const collisions=await page.evaluate(()=>{
+        const visible=node=>getComputedStyle(node).visibility!=='hidden'&&node.getClientRects().length;
+        const labels=[...document.querySelectorAll('#timeline .day-calendar-boundary .timeline-end-label,#timeline .day-calendar-now')].filter(visible);
+        const text=[...document.querySelectorAll('#timeline .day-calendar-event p,#timeline .day-calendar-hour > span')].filter(visible);
+        return labels.flatMap(label=>text.filter(node=>{
+          const a=label.getBoundingClientRect(),b=node.getBoundingClientRect();
+          // The Now line may cross an event; its text stays in the time gutter.
+          if(label.classList.contains('day-calendar-now')&&node.matches('.day-calendar-event p'))return false;
+          return a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
+        }).map(node=>`${label.textContent} overlaps ${node.textContent}`));
+      });
+      assert.deepEqual(collisions,[],`Time labels don't cover card text or each other at ${width}px`);
       assert.equal(await page.locator('#timeline .brief .item-meta').count(),0);
       await page.screenshot({path:`test-results/full-day-dense-${width}.png`});
     }
+    await page.locator('#timeline .timeline-start .timeline-end-label').click();
+    assert(await page.locator('#day-hours-dialog').evaluate(dialog=>dialog.open));
+    await page.locator('#day-hours-dialog [data-close]').click();
     await page.locator('#timeline-compact').click();
     assert.equal(await page.locator('#timeline.day-calendar').count(),0);
     await page.setViewportSize({width:1280,height:800});
