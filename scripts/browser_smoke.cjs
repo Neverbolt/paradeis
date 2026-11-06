@@ -76,6 +76,45 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector('.current-time');
     assert.equal(await page.locator('#day-plan-dialog[open]').count(), 0);
     await page.setViewportSize({width: 1280, height: 800});
+    await page.locator('#timeline-calendar').click();
+    await page.waitForSelector('#timeline.day-calendar .day-calendar-canvas');
+    await page.reload();
+    await page.waitForSelector('#timeline.day-calendar .day-calendar-canvas');
+    await page.waitForLoadState('networkidle');
+    assert.equal(await page.locator('#timeline-calendar').getAttribute('aria-pressed'), 'true');
+    await page.evaluate(() => {
+      const start = Date.parse(state.day.workday.start), at = minutes => new Date(start + minutes * 60000).toISOString();
+      const item = (id, title, from, to, extra={}) => ({id,title,start:at(from),end:at(to),kind:'focus',...extra});
+      window.fullDayFixture = {...state.day,
+        blocks:[item(9001,'Strategy',30,210,{kind:'work'}),item(9002,'Team meeting',90,120,{kind:'meeting'})],
+        sessions:[item(9003,'Research',30,55,{status:'completed',elapsed:1500,effort:3,focus_score:2}),
+          item(9004,'Write proposal',150,200,{status:'completed',elapsed:3000,effort:4,focus_score:3})], plan:[]};
+      renderTimeline(document.querySelector('#timeline'), fullDayFixture);
+      document.querySelector('#timeline').scrollTop = 0;
+    });
+    for (const width of [1280,390]) {
+      await page.setViewportSize({width,height:width===390?844:800});
+      const layout = await page.evaluate(() => {
+        const events=[...document.querySelectorAll('#timeline .day-calendar-event')],
+          first=events.find(event=>event.textContent.includes('Research')),
+          last=events.find(event=>event.textContent.includes('Write proposal')),
+          canvas=document.querySelector('.day-calendar-canvas').getBoundingClientRect();
+        return {duration:first.getBoundingClientRect().height, gap:last.getBoundingClientRect().top-first.getBoundingClientRect().top,
+          left:canvas.left,right:canvas.right,width:innerWidth};
+      });
+      assert(Math.abs(layout.duration-50)<1, '25 minutes gets 50px');
+      assert(Math.abs(layout.gap-240)<1, 'Two hours retains its full calendar distance');
+      assert(layout.left>=0&&layout.right<=layout.width+1);
+      await page.screenshot({path:`test-results/full-day-calendar-${width}.png`});
+    }
+    await page.evaluate(() => {
+      const timeline=document.querySelector('#timeline');timeline.scrollTop=150;
+      renderTimeline(timeline,fullDayFixture);
+      if(timeline.scrollTop!==150)throw Error('Full day lost manual scroll position');
+    });
+    await page.locator('#timeline-compact').click();
+    assert.equal(await page.locator('#timeline.day-calendar').count(),0);
+    await page.setViewportSize({width:1280,height:800});
     await page.locator('#overview-view').click();
     await page.waitForSelector('.calendar-day');
     await page.evaluate(async()=>{calendarAnchor='2026-11-01';await loadCalendar({target:'2026-10-26'});});

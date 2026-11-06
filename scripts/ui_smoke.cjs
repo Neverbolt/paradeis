@@ -105,7 +105,28 @@ function checkWorkWrappingUI(w) {
   const orderedTimes = [...wrapped.querySelector('.work-reservation-items').children]
     .map(row => Date.parse(row.dataset.start)).filter(Number.isFinite);
   assert.deepEqual(orderedTimes, [...orderedTimes].sort((a,b) => a-b));
-
+  const calendar = w.document.createElement('div');
+  w.renderDayCalendar(calendar, {...day, workday: bounds});
+  const events = [...calendar.querySelectorAll('.day-calendar-event')];
+  assert.equal(events.length, 6);
+  for (const event of events) {
+    assert(Math.abs(parseFloat(event.style.height) - (Date.parse(event.dataset.end) - Date.parse(event.dataset.start)) / 30000) < .01);
+  }
+  const before = events.find(event => event.textContent.includes('Before Work'));
+  const after = events.find(event => event.textContent.includes('After Work'));
+  assert(Math.abs(parseFloat(after.style.top) - parseFloat(before.style.top) - 210) < .01);
+  assert.equal(calendar.querySelectorAll('.day-calendar-work').length, 3);
+  assert.equal(calendar.querySelectorAll('.day-calendar-boundary').length, 2);
+  calendar.scrollTop = 200;
+  w.renderDayCalendar(calendar, {...day, workday: bounds});
+  assert.equal(calendar.scrollTop, 200, 'Refreshing the full day preserves manual scrolling');
+  w.renderDayCalendar(calendar, {...day, sessions: [...day.sessions,
+    entry(104, 'Overlapping focus', -24, -10, {status:'completed',elapsed:840,effort:0})]});
+  const overlapping = [...calendar.querySelectorAll('.day-calendar-event')]
+    .filter(event => event.textContent.includes('Another topic') || event.textContent.includes('Overlapping focus'));
+  assert.equal(overlapping.length, 2);
+  assert(overlapping.every(event => event.style.getPropertyValue('--event-columns') === '2'));
+  assert.notEqual(overlapping[0].style.getPropertyValue('--event-lane'), overlapping[1].style.getPropertyValue('--event-lane'));
 }
 
 async function checkPeriodPlanningUI(w) {

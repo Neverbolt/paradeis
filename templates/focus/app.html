@@ -25,6 +25,7 @@
       </section>
       <section class="timeline-column" aria-label="Day timeline">
         <div class="timeline-toolbar"><div class="date-navigation"><button id="day-prev" class="icon-button" aria-label="Previous day">‹</button><button id="go-today" class="quiet small">Today</button><button id="day-next" class="icon-button" aria-label="Next day">›</button><span id="timeline-date"></span></div><button id="block-open" class="secondary small">＋ Block</button></div>
+        <div class="day-layout-switch" role="group" aria-label="Day timeline layout"><button id="timeline-compact" type="button" aria-pressed="true">Compact</button><button id="timeline-calendar" type="button" aria-pressed="false">Full day</button></div>
         <div id="timeline" class="timeline"></div>
         <section class="daily-summary"><div class="section-heading"><h2>Day summary</h2><span id="day-summary" class="small muted"></span></div><form id="day-note-form"><label for="day-note" class="sr-only">Day summary</label><textarea id="day-note" rows="2" maxlength="10000" placeholder="Notes"></textarea><div class="note-actions"><span id="day-note-status" class="small muted" aria-live="polite"></span><button type="submit" class="secondary small">Save</button></div></form></section>
       </section>
