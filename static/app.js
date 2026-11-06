@@ -916,6 +916,14 @@ function currentBlock() {
   return [state.live_block, state.next_block].find(block => block &&
     Date.parse(block.start) <= now() && now() < Date.parse(block.end)) || null;
 }
+function updateFavicon(mode) {
+  const icon = $("app-favicon"), color = mode === "Break" ? "break" : "focus";
+  // Only update on a mode change, never on each countdown tick.
+  if (icon && icon.dataset.mode !== color) {
+    icon.href = icon.dataset[color];
+    icon.dataset.mode = color;
+  }
+}
 function tick() {
   if (!state) return;
   const taskRows = [...$("task-list").children];
@@ -988,6 +996,7 @@ function tick() {
   $("timer-minutes").textContent = minutes;
   $("timer-seconds").textContent = `:${secondPart}`;
   $("timer-mode").textContent = mode;
+  updateFavicon(mode);
   $("timer-task").textContent = task;
   $("timer-main").textContent = label;
   $("timer-main").disabled =
