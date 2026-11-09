@@ -1,5 +1,6 @@
 """Period review context and movable end-of-day review reservations."""
 from datetime import timedelta
+from django.db.models.functions import Trim
 from .models import Block, DayPlan, Note, PeriodGoal, Session
 from . import planning
 from .services import Conflict, block_bounds, local_day, workday_bounds
@@ -36,9 +37,18 @@ def detail(user, prefs, now, period, day):
     return result
 
 
+def previous_active_day(user, today):
+    sessions = Session.objects.filter(user=user, date__lt=today).exclude(status='cancelled')
+    notes = Note.objects.filter(user=user, period='day', date__lt=today).annotate(content=Trim('text')).exclude(content='')
+    dates = [sessions.order_by('-date').values_list('date', flat=True).first(),
+             notes.order_by('-date').values_list('date', flat=True).first()]
+    return max((day for day in dates if day is not None), default=None)
+
+
 def pending(user, prefs, now, goals):
     today = local_day(prefs, now)
-    candidates = [('day', today - timedelta(days=1))]
+    previous = previous_active_day(user, today)
+    candidates = [('day', previous)] if previous else []
     for period in planning.PERIODS:
         candidates.append((period, planning.next_period(period, today, -1)))
     for goal in goals:

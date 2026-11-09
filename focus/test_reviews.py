@@ -87,14 +87,41 @@ class ReviewTests(TestCase):
         quarterly=self.client.get('/api/reviews/?period=quarter&date=2026-11-09').json()
         self.assertEqual(len(quarterly['context']),3);self.assertEqual(quarterly['context'][0]['text'],'October reflection')
 
-    def test_notes_are_the_review_and_reminder_is_only_yesterday(self):
+    def recorded(self, day, kind='focus', user=None, status='completed'):
+        start=datetime.combine(day,time(10),tzinfo=timezone.utc)
+        return Session.objects.create(user=user or self.user,date=day,kind=kind,status=status,
+            started_at=start,resumed_at=start,deadline=start+timedelta(minutes=25),
+            ended_at=start+timedelta(minutes=25),remaining_seconds=0,planned_seconds=1500,elapsed_seconds=1500)
+
+    def daily_reminders(self):
+        return [item for item in self.state()['planning']['reviews'] if item['period']=='day']
+
+    def test_empty_weekend_is_skipped_and_only_latest_active_day_is_considered(self):
+        self.recorded(date(2026,11,5))
+        self.recorded(date(2026,11,6),kind='meeting')
         DayPlan.objects.create(user=self.user,date=date(2026,11,8))
-        DayPlan.objects.create(user=self.user,date=date(2026,11,6))
-        pending=self.state()['planning']['reviews']
-        self.assertIn({'period':'day','date':'2026-11-08'},pending)
-        self.assertNotIn({'period':'day','date':'2026-11-06'},pending)
-        self.post('/api/notes/',{'period':'day','date':'2026-11-08','text':'Reviewed'})
-        self.assertNotIn({'period':'day','date':'2026-11-08'},self.state()['planning']['reviews'])
+        Block.objects.create(user=self.user,date=date(2026,11,8),start=time(17),end=time(18),title='Reserved')
+        self.recorded(date(2026,11,8),status='cancelled')
+        self.recorded(date(2026,11,8),user=self.other)
+        self.assertEqual(self.daily_reminders(),[{'period':'day','date':'2026-11-06'}])
+        self.post('/api/notes/',{'period':'day','date':'2026-11-06','text':'Reviewed'})
+        self.assertEqual(self.daily_reminders(),[])
+
+    def test_notes_only_day_is_activity_and_prevents_older_backlog(self):
+        self.recorded(date(2026,11,6))
+        Note.objects.create(user=self.user,period='day',date=date(2026,11,7),text='Reflection')
+        Note.objects.create(user=self.user,period='day',date=date(2026,11,8),text='   ')
+        self.assertEqual(self.daily_reminders(),[])
+
+    def test_empty_account_and_planning_only_days_do_not_prompt(self):
+        DayPlan.objects.create(user=self.user,date=date(2026,11,8))
+        self.assertEqual(self.daily_reminders(),[])
+
+    def test_current_and_future_days_do_not_replace_previous_activity(self):
+        self.recorded(date(2026,10,1))
+        self.recorded(NOW.date())
+        Note.objects.create(user=self.user,period='day',date=date(2026,11,10),text='Future')
+        self.assertEqual(self.daily_reminders(),[{'period':'day','date':'2026-10-01'}])
 
     def test_missing_period_review_is_reminded_even_when_next_goals_exist(self):
         DayPlan.objects.create(user=self.user,date=date(2026,11,4))
@@ -115,7 +142,7 @@ class ReviewTests(TestCase):
 
     def test_reminders_use_configured_day_rollover(self):
         self.prefs.day_rollover=time(4);self.prefs.save()
-        DayPlan.objects.create(user=self.user,date=date(2026,11,8))
+        self.recorded(date(2026,11,8))
         with patch('django.utils.timezone.now',return_value=NOW.replace(day=10,hour=3)):
             state=self.state()
         self.assertEqual(state['today'],'2026-11-09')
