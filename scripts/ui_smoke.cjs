@@ -144,7 +144,7 @@ async function checkPeriodPlanningUI(w) {
   october=months()[0];input=october.querySelector('textarea');
   assert.equal(input.value,'*October reflection*','Month draft survives navigating into November and back');
   input.form.requestSubmit();
-  await waitFor(()=>october.querySelector('.note-actions').textContent.includes('Saved'),'save October note');
+  await waitFor(()=>october.querySelector('[data-note-status]').textContent.includes('Saved'),'save October note');
   october.querySelector('.period-goals button').click();
   await waitFor(()=>$('period-goal-dialog').open&&!$('period-goal-text').disabled,'original goal editor reopened');
   $('period-goal-text').value='**A defined October outcome**';
@@ -165,7 +165,7 @@ async function checkPeriodPlanningUI(w) {
   q.querySelector('textarea').value='*Quarter reflection*';
   q.querySelector('textarea').dispatchEvent(new w.Event('input',{bubbles:true}));
   q.querySelector('form').requestSubmit();
-  await waitFor(()=>q.querySelector('.note-actions').textContent.includes('Saved'),'save quarter note');
+  await waitFor(()=>q.querySelector('[data-note-status]').textContent.includes('Saved'),'save quarter note');
   const untrusted=w.document.createElement('div');w.sourceMarkdown(untrusted,'*<img src=x onerror=alert(1)>*');
   assert.equal(untrusted.querySelector('img'),null);assert(untrusted.querySelector('em').textContent.includes('<img'));
   await w.showView(false);
@@ -819,11 +819,35 @@ async function checkSchedulingUI(w) {
 
   $("day-note").value = `Daily reflection ${suffix}`;
   change("day-note");
-  submit("day-note-form");
   await waitFor(
     () => $("day-note-status").textContent === "Saved",
     "save day note",
   );
+  // Debounce, failure visibility, leave-page protection, and edits during a save.
+  const realNoteApi = w.api;
+  let writes = [], releaseSave;
+  w.api = async (path, body) => {
+    if (path === 'notes/' && body) {
+      writes.push(body.text);
+      if (body.text === 'Failure draft') throw new Error('Offline');
+      if (body.text === 'Slow draft') await new Promise(resolve => {releaseSave = resolve;});
+    }
+    return realNoteApi(path, body);
+  };
+  $('day-note').value = 'Failure draft';change('day-note');
+  await waitFor(() => $('day-note-status').classList.contains('note-save-error'), 'visible autosave failure');
+  const leaving = new w.Event('beforeunload', {cancelable:true});w.dispatchEvent(leaving);
+  assert(leaving.defaultPrevented, 'Unsaved notes prevent leaving');
+  $('day-note').value = 'Brief draft';change('day-note');
+  $('day-note').value = 'Slow draft';change('day-note');
+  await waitFor(() => releaseSave, 'slow save starts');
+  $('day-note').value = 'Latest draft';change('day-note');
+  releaseSave();
+  await waitFor(() => $('day-note-status').textContent === 'Saved', 'latest draft saved');
+  assert.deepEqual(writes, ['Failure draft', 'Slow draft', 'Latest draft']);
+  assert.equal((await realNoteApi(`notes/?period=day&date=${w.eval('selectedDay')}`)).text, 'Latest draft');
+  assert(!w.eval('drafts.size'), 'Only acknowledged content clears drafts');
+  w.api = realNoteApi;
   delayNextNote = true;
   await w.refresh();
   await waitFor(() => delayedNote, "hold a stale note read");
@@ -923,7 +947,7 @@ async function checkSchedulingUI(w) {
       key: "Enter", ctrlKey: true, bubbles: true, cancelable: true,
     }));
     await waitFor(
-      () => group.querySelector(".note-actions").textContent.includes("Saved"),
+      () => w.document.querySelector(`.period-group.${period} [data-note-status]`).textContent.includes("Saved"),
       `save ${period} note`,
     );
   }

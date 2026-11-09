@@ -27,7 +27,7 @@
         <div class="timeline-toolbar"><div class="date-navigation"><button id="day-prev" class="icon-button" aria-label="Previous day">‹</button><button id="go-today" class="quiet small">Today</button><button id="day-next" class="icon-button" aria-label="Next day">›</button><span id="timeline-date"></span></div><button id="block-open" class="secondary small">＋ Block</button></div>
         <div class="day-layout-switch" role="group" aria-label="Day timeline layout"><button id="timeline-compact" type="button" aria-pressed="true">Compact</button><button id="timeline-calendar" type="button" aria-pressed="false">Full day</button></div>
         <div id="timeline" class="timeline"></div>
-        <section class="daily-summary"><div class="section-heading"><h2>Day summary</h2><button id="day-review-open" type="button" class="text-button small">Review</button><span id="day-summary" class="small muted"></span></div><form id="day-note-form"><label for="day-note" class="sr-only">Day summary</label><textarea id="day-note" rows="2" maxlength="10000" placeholder="Notes"></textarea><div class="note-actions"><span id="day-note-status" class="small muted" aria-live="polite"></span><button type="submit" class="secondary small">Save</button></div></form></section>
+        <section class="daily-summary"><div class="section-heading"><h2>Day summary</h2><button id="day-review-open" type="button" class="text-button small">Review</button><span id="day-summary" class="small muted"></span></div><form id="day-note-form"><div class="section-heading notes-heading"><label for="day-note">Notes</label><span id="day-note-status" class="small muted" aria-live="polite"></span></div><textarea id="day-note" rows="2" maxlength="10000" placeholder="Notes"></textarea></form></section>
       </section>
     </div>
     <section id="overview" hidden>
@@ -73,11 +73,11 @@
   <aside class="review-context-panel"><h2>Looking back</h2><div id="period-review-context"></div></aside>
   <section class="review-main-panel"><form id="period-review-form">
     <div class="dialog-heading"><div><h2 id="period-review-title">Review</h2><p id="period-review-date" class="small muted"></p></div><button type="button" id="period-review-close" class="icon-button" aria-label="Close period review">×</button></div>
-    <label for="period-review-text">Notes & reflection</label><textarea id="period-review-text" rows="9" maxlength="10000" placeholder="What happened? What did you learn? What comes next?"></textarea>
+    <div class="section-heading notes-heading"><label for="period-review-text">Notes & reflection</label><span id="period-review-status" class="small muted" aria-live="polite"></span></div><textarea id="period-review-text" rows="9" maxlength="10000" placeholder="What happened? What did you learn? What comes next?"></textarea>
     <section id="review-reservation"><h3>Daily review pomo</h3><p id="review-reservation-status" class="small muted"></p>
       <details id="review-slot-fields"><summary>Change time</summary><label for="review-slot-date">Date</label><input id="review-slot-date" type="date"><div class="form-row"><div><label for="review-slot-start">Start</label><input id="review-slot-start" type="time"></div><div><label for="review-slot-minutes">Minutes</label><input id="review-slot-minutes" type="number" min="1" max="180"></div></div><div class="note-actions"><button id="review-slot-remove" type="button" class="text-button small">Cancel reservation</button><button id="review-slot-save" type="button" class="secondary small">Reserve pomo</button></div></details>
       <button id="review-slot-start-timer" type="button" class="secondary small">Start review pomo</button>
-    </section><p class="dialog-error" role="alert" hidden></p><div class="dialog-actions"><span id="period-review-status" class="small muted"></span><button id="period-review-skip" type="button" class="text-button small">Skip review</button><button id="period-review-save" type="submit" class="primary">Save review</button></div>
+    </section><p class="dialog-error" role="alert" hidden></p><div class="dialog-actions"><button id="period-review-skip" type="button" class="text-button small">Skip review</button><button id="period-review-save" type="submit" class="primary">Done</button></div>
   </form></section>
 </dialog>
 

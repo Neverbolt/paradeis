@@ -18,20 +18,24 @@ function renderReviewPrompts() {
 }
 async function openPeriodReview(period, date, continuation=null) {
   if(reviewSaving)return;
-  const version=++reviewRead, key=`${period}:${date}`, dialog=$("period-review-dialog");
+  const version=++reviewRead, key=`${period}:${date}`, noteVersion=noteReads.get(key)||0, dialog=$("period-review-dialog");
   promptedReviews.add(key);reviewPeriod={period,date};reviewContinuation=continuation;
   $("period-review-title").textContent=`${{day:'Daily',week:'Weekly',month:'Monthly',quarter:'Quarterly'}[period]} review`;
   $("period-review-date").textContent=periodLabel(period,date);
   $("period-review-text").value=drafts.get(key)||'';$("period-review-text").disabled=true;
   $("period-review-context").replaceChildren(el('p','muted','Loading…'));
   $("review-reservation").hidden=true;
-  $("period-review-save").textContent=continuation?'Save & continue':'Save review';
+  $("period-review-save").textContent=continuation?'Continue':'Done';
   $("period-review-status").textContent='';openDialog(dialog);
   try {
     const data=await api(`reviews/?period=${period}&date=${date}`);
     if(version!==reviewRead||!dialog.open)return;
     reviewPeriod=data;
-    $("period-review-text").value=drafts.get(key)??data.text;
+    if ((noteReads.get(key)||0)===noteVersion) savedNotes.set(key,data.text);
+    $("period-review-text").dataset.note=key;
+    $("period-review-status").dataset.noteStatus=key;
+    paintNoteStatus(key);
+    $("period-review-text").value=drafts.get(key)??savedNotes.get(key)??data.text;
     $("period-review-text").disabled=false;paintMarkdown($("period-review-text"));
     const context=$("period-review-context");context.replaceChildren();
     if(period==='day') {
@@ -81,8 +85,7 @@ function closePeriodReview() {
 function initializeReviews() {
   enhanceMarkdown($("period-review-text"));
   $("period-review-text").addEventListener('input',()=>{
-    if(reviewPeriod)drafts.set(`${reviewPeriod.period}:${reviewPeriod.date}`,$("period-review-text").value);
-    $("period-review-status").textContent='Unsaved';
+    if(reviewPeriod)editNote(`${reviewPeriod.period}:${reviewPeriod.date}`,$("period-review-text").value);
   });
   $("period-review-close").onclick=$("period-review-skip").onclick=closePeriodReview;
   $("period-review-dialog").addEventListener('cancel',event=>{event.preventDefault();closePeriodReview();});
@@ -92,11 +95,7 @@ function initializeReviews() {
     if(!text.trim()){showError(new Error('Write your review, or choose Skip review.'),$("period-review-dialog"));return;}
     reviewSaving=true;$("period-review-text").disabled=true;$("period-review-save").disabled=true;
     try {
-      await api('notes/',{period,date,text});savedNotes.set(key,text);drafts.delete(key);
-      noteReads.set(key,(noteReads.get(key)||0)+1);
-      if(calendarData)calendarData.notes[key]=text;
-      for(const input of document.querySelectorAll('textarea[data-note]'))if(input.dataset.note===key){input.value=text;paintMarkdown(input);}
-      if(period==='day'&&selectedDay===date){$("day-note").value=text;paintMarkdown($("day-note"));$("day-note-status").textContent="Saved";}
+      if (!await flushNote(key)) return;
       await refresh();if(overviewVisible)await loadCalendar({preserve:true});
       reviewSaving=false;closePeriodReview();
     } catch(error){showError(error,$("period-review-dialog"));}
