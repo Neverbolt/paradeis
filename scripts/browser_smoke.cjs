@@ -842,6 +842,50 @@ fs.mkdirSync("test-results", { recursive: true });
       }), 'Work contents fit inside the mobile frame');
       await page.screenshot({path: "test-results/work-scheduling-mobile.png"});
     }
+    await page.locator('#today-view').click();
+    await page.waitForLoadState('networkidle');
+    for (const period of ['day','week','month','quarter']) {
+      await page.evaluate(async period=>{
+        const date=period==='day'?state.today:period==='week'?monday(state.today):period==='month'?month(state.today):quarter(state.today);
+        await openPeriodReview(period,date);
+      },period);
+      await waitFor(()=>document.querySelector('#period-review-dialog').open&&!document.querySelector('#period-review-text').disabled);
+      assert.equal(await page.locator('#period-review-context textarea,#period-review-context input,#period-review-context button').count(),0);
+      if(period==='week')assert((await page.locator('#period-review-context').textContent()).includes('day reflection'));
+      if(period==='month')assert((await page.locator('#period-review-context').textContent()).includes('week reflection'));
+      if(period==='quarter')assert((await page.locator('#period-review-context').textContent()).includes('month reflection'));
+      await page.locator('#period-review-text').fill(`**${period} reflection**\n\nGood progress on the proposal. The afternoon meeting broke up the work.\n\nNext time: leave more room between commitments.`);
+      for(const width of [1280,390]) {
+        await page.setViewportSize({width,height:width===390?844:900});
+        assert(await page.locator('#period-review-dialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1));
+        await page.screenshot({path:`test-results/review-${period}-${width}.png`});
+      }
+      await page.locator('#period-review-text').press('Control+Enter');
+      await waitFor(()=>!reviewSaving&&!document.querySelector('#period-review-dialog').open);
+    }
+    await page.setViewportSize({width:1280,height:800});
+    await page.locator('#overview-view').click();
+    await page.waitForSelector('#calendar-periods .week-row .note-actions button.text-button');
+    await page.locator('#calendar-periods .week-row .note-actions button.text-button').click();
+    await waitFor(()=>document.querySelector('#period-review-dialog').open&&!document.querySelector('#period-review-text').disabled);
+    await page.locator('#period-review-skip').click();
+    // A missing review resurfaces on a new visit, but never repeatedly in this visit.
+    await page.evaluate(async()=>{
+      await api('notes/',{period:'day',date:shiftDay(monday(state.today),-1),text:'Previous week activity'});
+      await api('notes/',{period:'week',date:monday(shiftDay(state.today,-7)),text:''});
+    });
+    await page.reload();
+    await waitFor(()=>document.querySelector('#period-review-dialog').open&&!document.querySelector('#period-review-text').disabled);
+    const reminder=await page.evaluate(()=>({period:reviewPeriod.period,date:reviewPeriod.date}));
+    await page.locator('#period-review-skip').click();
+    await page.evaluate(()=>refresh());
+    assert.equal(await page.locator('#period-review-dialog[open]').count(),0);
+    await page.reload();
+    await waitFor(()=>document.querySelector('#period-review-dialog').open&&!document.querySelector('#period-review-text').disabled);
+    assert.deepEqual(await page.evaluate(()=>({period:reviewPeriod.period,date:reviewPeriod.date})),reminder);
+    await page.locator('#period-review-text').fill('Reviewed before planning the next week.');
+    await page.locator('#period-review-text').press('Control+Enter');
+    await waitFor(()=>!reviewSaving&&!document.querySelector('#period-review-dialog').open);
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

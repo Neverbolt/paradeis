@@ -946,7 +946,7 @@ function tick() {
   if (a) {
     seconds = remaining(a);
     mode =
-      a.planning ? "Planning" : a.kind === "meeting"
+      a.reviewing_day ? "Review" : a.planning ? "Review & planning" : a.kind === "meeting"
         ? "Meeting"
         : a.status === "paused"
           ? "Paused"
@@ -960,9 +960,9 @@ function tick() {
           : "Pause";
   } else if (block) {
     seconds = Math.max(0, (Date.parse(block.end) - now()) / 1000);
-    mode = block.kind === "meeting" ? "Meeting" : block.kind === "planning" ? "Planning" : "Break";
+    mode = block.kind === "meeting" ? "Meeting" : block.kind === "planning" ? (block.planning?.period === "day" ? "Review" : "Review & planning") : "Break";
     task = block.title;
-    label = block.kind === "planning" ? "Start planning" : "Start meeting";
+    label = block.kind === "planning" ? (block.planning?.period === "day" ? "Start review" : "Start planning") : "Start meeting";
   } else if (resting) {
     seconds = (Date.parse(state.break_until) - now()) / 1000;
     mode = "Break";
@@ -1052,11 +1052,14 @@ function tick() {
   }
 }
 async function timerAction(action, extra = {}) {
-  await mutate("timer/", {
+  const reservation=extra.block_id && [state.live_block,state.next_block,...state.day.blocks].find(block=>block?.id===extra.block_id)?.planning;
+  const saved=await mutate("timer/", {
     action,
     ...(state.active ? { id: state.active.id } : {}),
     ...extra,
   });
+  if(saved && action === "start" && reservation && !document.querySelector("dialog[open]"))
+    await openPeriodGoals(reservation.period,reservation.date);
 }
 $("timer-main").onclick = () => {
   const a = state.active, b = currentBlock();
@@ -1619,7 +1622,7 @@ function noteEditor(period, day, summary, title) {
   };
   const save = el("button", "secondary small", "Save");
   save.type = "submit";
-  actions.append(status, save);
+  actions.append(status, button("Review", "text-button small", () => openPeriodReview(period,day), `Review ${period} ${day}`), save);
   form.append(textarea, actions);
   form.onsubmit = (e) => {
     e.preventDefault();
@@ -2103,5 +2106,6 @@ setInterval(() => {
   if (!document.hidden && !busy) refresh().catch(showError);
 }, 15000);
 initializePlanning();
+initializeReviews();
 updateNotifications();
 refresh().then(applyRoute).catch(showError);

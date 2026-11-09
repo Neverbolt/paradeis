@@ -30,6 +30,8 @@ class Preferences(models.Model):
     auto_break = models.BooleanField(default=True)
     auto_armed = models.BooleanField(default=False)
     planning_workdays = models.JSONField(default=workdays_default)
+    daily_review_enabled = models.BooleanField(default=True)
+    daily_review_minutes = models.PositiveSmallIntegerField(default=15)
 
 
 class BlockTemplate(models.Model):
@@ -111,12 +113,13 @@ class DayHours(models.Model):
 
 class PeriodGoal(models.Model):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    period = models.CharField(max_length=7, choices=[("week", "Week"), ("month", "Month"), ("quarter", "Quarter")])
+    period = models.CharField(max_length=7, choices=[("day", "Day"), ("week", "Week"), ("month", "Month"), ("quarter", "Quarter")])
     date = models.DateField()
     text = models.TextField(max_length=10000, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
     reservation_skipped = models.BooleanField(default=False)
     reservation_needs_choice = models.BooleanField(default=False)
+    reservation_proposal = models.CharField(max_length=80, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=["user", "period", "date"], name="one_period_goal")]

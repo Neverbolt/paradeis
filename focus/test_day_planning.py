@@ -21,6 +21,8 @@ class DayPlanningTests(TestCase):
         self.other = get_user_model().objects.create_user("private")
         self.client.force_login(self.user)
         self.prefs = preferences(self.user)
+        self.prefs.daily_review_enabled = False
+        self.prefs.save(update_fields=["daily_review_enabled"])
         self.previous = Task.objects.create(user=self.user, title="Finish the proposal", goal_date=NOW.date() - timedelta(days=1))
         self.done = Task.objects.create(user=self.user, title="Review notes", goal_date=self.previous.goal_date,
                                        done=True, completed_on=self.previous.goal_date, position=1)

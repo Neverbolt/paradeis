@@ -4,6 +4,7 @@ let periodEditing = null, periodRead = 0, periodSaving = false, periodLoading = 
 const weekdayNames = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 function quarter(day) {return `${day.slice(0,4)}-${String(Math.floor((Number(day.slice(5,7))-1)/3)*3+1).padStart(2,"0")}-01`;}
 function periodLabel(period, day) {
+  if (period === "day") return dateLabel(day,{weekday:"long",month:"short",day:"numeric",year:"numeric"});
   if (period === "week") return `Week of ${dateLabel(day, {month:"short", day:"numeric", year:"numeric"})}`;
   if (period === "quarter") return `Q${Math.floor((Number(day.slice(5,7))-1)/3)+1} ${day.slice(0,4)}`;
   return dateLabel(day, {month:"long", year:"numeric"});
@@ -69,13 +70,24 @@ function renderPeriodPlanning() {
   if (!state?.planning) return false;
   renderDailyGoalContext();
   if ($("period-goal-dialog").open || periodLoading) return true;
+  if (renderReviewPrompts()) return true;
   if (document.querySelector("dialog[open]")) return false;
   const next = state.planning.pending.find(goal => !promptedGoals.has(`${goal.period}:${goal.date}`));
   if (!next) return false;
   openPeriodGoals(next.period, next.date).catch(showError);
   return true;
 }
-async function openPeriodGoals(period, day) {
+async function openPeriodGoals(period, day, afterReview=false) {
+  if(period==='day')return openPeriodReview(period,day);
+  const previous=previousReviewDate(period,day), reviewKey=`${period}:${previous}`;
+  if(periodLoading)return;
+  if(!afterReview&&!promptedReviews.has(reviewKey)){
+    periodLoading=true;
+    try {
+      const prior=await api(`reviews/?period=${period}&date=${previous}`);
+      if(prior.has_activity||prior.text.trim()){periodLoading=false;return openPeriodReview(period,previous,()=>openPeriodGoals(period,day,true).catch(showError));}
+    } finally {periodLoading=false;}
+  }
   const key = `${period}:${day}`, version = ++periodRead;
   promptedGoals.add(key);
   periodLoading = true;
@@ -185,6 +197,8 @@ async function openPlanningSettings() {
   try {
     const settings = await api("planning-settings/");
     makeWeekdays($("planning-workdays"),settings.workdays);
+    $("daily-review-enabled").checked=settings.daily_review_enabled;
+    $("daily-review-minutes").value=settings.daily_review_minutes;
     const fields = $("planning-rule-fields"); fields.replaceChildren();
     for (const rule of settings.rules) {
       const group = el("fieldset", "planning-rule"); group.dataset.period=rule.period;
@@ -257,6 +271,6 @@ function initializePlanning() {
         trigger_mode:read("trigger_mode")?.value||"last_workday",day_of_month:Number(read("day_of_month")?.value??31),
         time:read("time").value,minutes:Number(read("minutes").value)};
     });
-    await mutate("planning-settings/",{workdays:chosenWeekdays($("planning-workdays")),rules},$("planning-settings-dialog"));
+    await mutate("planning-settings/",{daily_review_enabled:$("daily-review-enabled").checked,daily_review_minutes:Number($("daily-review-minutes").value),workdays:chosenWeekdays($("planning-workdays")),rules},$("planning-settings-dialog"));
   };
 }

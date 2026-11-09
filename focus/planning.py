@@ -26,6 +26,8 @@ def period_date(period, day):
 
 def next_period(period, day, step=1):
     day = period_date(period, day)
+    if period == "day":
+        return day + timedelta(days=step)
     if period == "week":
         return day + timedelta(weeks=step)
     months = step * (3 if period == "quarter" else 1)
@@ -98,7 +100,7 @@ def book(goal, prefs, start, end, auto=False):
         block = Block(user=goal.user, goal_plan=goal)
     block.date, block.start, block.end = first.date(), first.time().replace(tzinfo=None), last.time().replace(tzinfo=None)
     block.timezone, block.kind, block.fixed, block.deleted = prefs.timezone, "planning", True, False
-    block.title = f"{ {'week':'Weekly', 'month':'Monthly', 'quarter':'Quarterly'}[goal.period]} planning"
+    block.title = "Daily review" if goal.period == "day" else f"{ {'week':'Weekly', 'month':'Monthly', 'quarter':'Quarterly'}[goal.period]} review & planning"
     block.planning_auto = auto
     block.save()
     return block
@@ -147,20 +149,20 @@ def context(user, period, day):
 
 
 def goal_detail(user, prefs, now, period, day):
-    if period not in PERIODS:
+    if period not in (*PERIODS, "day"):
         raise ValueError("Choose week, month, or quarter goals.")
     day = period_date(period, day)
     result = goal_value(user, period, day)
     result["context"] = context(user, period, day)
     result["previous"] = goal_value(user, period, next_period(period, day, -1))
     rule = rule_for(user, period)
-    result["minutes"] = rule.minutes
+    result["minutes"] = prefs.daily_review_minutes if period == "day" else rule.minutes
     goal = PeriodGoal.objects.filter(user=user, period=period, date=day).first()
     block = Block.objects.filter(goal_plan=goal, deleted=False).first() if goal else None
     result["reservation"] = serialize_block(block, prefs) if block else None
     if block:
         result["reservation"]["tracked"] = block.session_set.exclude(status="cancelled").exists()
-    result["reservation_conflict"] = ""
+    result["reservation_conflict"] = "Choose a time for the daily review; its automatic slot is occupied." if period == "day" and goal and goal.reservation_needs_choice else ""
     if rule.enabled and not block and not (goal and goal.reservation_skipped):
         start, end = proposed(rule, day, prefs)
         result["suggested_date"] = start.astimezone(ZoneInfo(prefs.timezone)).date().isoformat()
@@ -188,4 +190,5 @@ def snapshot(user, prefs, now):
         following = next_period(period, current)
         if rule.enabled and proposed(rule, following, prefs)[0] <= now and not goal_value(user, period, following)["text"].strip():
             pending.append({"period": period, "date": following.isoformat()})
-    return {"pending": pending, "weekly": goal_value(user, "week", today)}
+    from . import reviews
+    return {"pending": pending, "reviews": reviews.pending(user, prefs, now, pending), "weekly": goal_value(user, "week", today)}
