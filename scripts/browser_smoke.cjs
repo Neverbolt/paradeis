@@ -856,7 +856,7 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator('#period-review-text').fill(`**${period} reflection**\n\nGood progress on the proposal. The afternoon meeting broke up the work.\n\nNext time: leave more room between commitments.`);
       for(const width of [1280,390]) {
         await page.setViewportSize({width,height:width===390?844:900});
-        assert(await page.locator('#period-review-dialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1));
+        await page.waitForFunction(()=>{const dialog=document.querySelector('#period-review-dialog');return dialog.scrollWidth<=dialog.clientWidth+1;});
         await page.screenshot({path:`test-results/review-${period}-${width}.png`});
       }
       await page.locator('#period-review-text').press('Control+Enter');
@@ -896,7 +896,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.waitForSelector('#period-review-status.note-save-error');
     for (const width of [1280,390]) {
       await page.setViewportSize({width,height:844});
-      assert(await page.locator('#period-review-dialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1));
+      await page.waitForFunction(()=>{const dialog=document.querySelector('#period-review-dialog');return dialog.scrollWidth<=dialog.clientWidth+1;});
       await page.screenshot({path:`test-results/notes-autosave-error-${width}.png`});
     }
     await page.evaluate(() => {api=originalAutosaveApi;});
