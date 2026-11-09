@@ -432,6 +432,7 @@ def serialize_session(session, now):
         "reflection": session.reflection,
         "pending_break_seconds": session.pending_break_seconds,
         "planning": bool(session.block_id and session.block.kind == "planning"),
+        "reviewing_day": bool(session.block_id and session.block.goal_plan_id and session.block.goal_plan.period == "day"),
         "topic_choice": (str(session.selected_task_id) if session.topic_mode == "task"
                          and session.selected_task_id else "open" if session.topic_mode == "open" else ""),
         "topic_default": session.work_topic if session.topic_mode == "work" else "",

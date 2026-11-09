@@ -20,6 +20,8 @@ class PeriodPlanningTests(TestCase):
         self.other = get_user_model().objects.create_user("other-plan")
         self.client.force_login(self.user)
         self.prefs = preferences(self.user)
+        self.prefs.daily_review_enabled = False
+        self.prefs.save(update_fields=["daily_review_enabled"])
         self.clock = patch("focus.views.timezone.now", return_value=NOW)
         self.clock.start()
         self.addCleanup(self.clock.stop)
@@ -108,7 +110,7 @@ class PeriodPlanningTests(TestCase):
             started=self.post("/api/timer/",{"action":"start","block_id":block.id})
             self.assertEqual(started.status_code,201,started.content)
             session=Session.objects.get(id=started.json()["id"])
-            self.assertEqual((session.kind,session.title,session.planned_seconds),("focus","Weekly planning",1500))
+            self.assertEqual((session.kind,session.title,session.planned_seconds),("focus","Weekly review & planning",1500))
             self.assertEqual(self.post("/api/timer/",{"action":"pause","id":session.id}).status_code,409)
         self.assertEqual(block.goal_plan.date,date(2026,10,12))
 

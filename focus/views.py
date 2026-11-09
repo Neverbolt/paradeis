@@ -17,7 +17,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_GET
 
 from .models import Allocation, Block, BlockTemplate, DayHours, DayPlan, LoginAttempt, Note, PeriodGoal, PlanningRule, PushSubscription, Session, Task
-from . import push, planning
+from . import push, planning, reviews
 from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_template
 from .services import (
     Conflict,
@@ -74,6 +74,7 @@ def api(methods):
                     materialize(request.user, today, today + timedelta(days=1), today)
                     active = settle(request.user, prefs, now)
                     planning.ensure_reservations(request.user, prefs, now)
+                    reviews.ensure_daily(request.user, prefs, now)
                     return fn(request, data, prefs, now, active, *args, **kwargs)
             except Conflict as error:
                 return JsonResponse({"error": str(error)}, status=409)
@@ -198,6 +199,7 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=
         else sessions
     )
     if blocks is None:
+        reviews.ensure_daily(user, prefs, now, day)
         materialize(user, day, day + timedelta(days=int(prefs.day_rollover != time(0))), calendar_day(prefs, now))
         blocks = list(Block.objects.filter(user=user, date__range=(day, day + timedelta(days=1)),
                                            deleted=False).select_related("goal_plan").prefetch_related("session_set"))
@@ -362,7 +364,7 @@ def history(request, data, prefs, now, active):
             ],
             "summary": summary(sessions),
             "notes": {f"{n.period}:{n.date}": n.text for n in note_rows},
-            "period_goals": {f"{g.period}:{g.date}": g.text for g in PeriodGoal.objects.filter(
+            "period_goals": {f"{g.period}:{g.date}": g.text for g in PeriodGoal.objects.filter(period__in=planning.PERIODS,
                 user=request.user, date__range=(period_date("quarter", start), end))},
             "period_summaries": {key: summary(rows) for key, rows in period_summaries.items()},
             "previous": (start - timedelta(days=7)).isoformat(),
@@ -426,6 +428,7 @@ def day_hours_save(request, data, prefs, now, active):
             raise ValueError("Day end must be after its start.")
         workday_bounds(day, prefs, SimpleNamespace(start=start, end=end))
         DayHours.objects.update_or_create(user=request.user, date=day, defaults={"start": start, "end": end})
+    reviews.ensure_daily(request.user, prefs, now, day)
     return JsonResponse({"ok": True})
 
 
@@ -889,13 +892,15 @@ def recurrences(request, data, prefs, now, active, pk=None):
 def period_goals(request, data, prefs, now, active):
     source = request.GET if request.method == "GET" else data
     period = source.get("period")
-    if period not in planning.PERIODS:
+    if period not in (*planning.PERIODS, "day"):
         raise ValueError("Choose week, month, or quarter goals.")
     day = period_date(period, parse_day(source["date"]))
     if request.method == "POST":
         goal, _ = PeriodGoal.objects.get_or_create(user=request.user, period=period, date=day)
         action = data.get("action", "save")
         if action == "save":
+            if period == "day":
+                raise ValueError("Daily reviews are saved as notes.")
             value = text(data, "text", 10000)
             if not value:
                 raise ValueError("Enter goals before saving, or choose Later.")
@@ -939,16 +944,22 @@ def planning_settings(request, data, prefs, now, active):
                       "trigger_mode": row["trigger_mode"], "day_of_month": integer(row, "day_of_month", 1, 31),
                       "time": clock(row["time"]), "minutes": integer(row, "minutes", 1, 180)}
             PlanningRule.objects.update_or_create(user=request.user, period=row["period"], defaults=values)
+        if "daily_review_enabled" in data:
+            if type(data["daily_review_enabled"]) is not bool:
+                raise ValueError("Choose whether daily reviews are enabled.")
+            prefs.daily_review_enabled = data["daily_review_enabled"]
+            prefs.daily_review_minutes = integer(data, "daily_review_minutes", 1, 180)
         prefs.planning_workdays = workdays
-        prefs.save(update_fields=["planning_workdays"])
+        prefs.save(update_fields=["planning_workdays", "daily_review_enabled", "daily_review_minutes"])
         for block in Block.objects.filter(user=request.user, kind="planning", planning_auto=True, deleted=False,
-                                          date__gte=calendar_day(prefs, now)):
+                                          date__gte=calendar_day(prefs, now)).exclude(goal_plan__period="day"):
             if block_bounds(block, prefs)[0] >= now and not block.session_set.exclude(status="cancelled").exists():
                 block.deleted = True
                 block.save(update_fields=["deleted"])
-        PeriodGoal.objects.filter(user=request.user, date__gte=period_date("quarter", local_day(prefs, now))).update(reservation_needs_choice=False)
+        PeriodGoal.objects.filter(user=request.user, period__in=planning.PERIODS, date__gte=period_date("quarter", local_day(prefs, now))).update(reservation_needs_choice=False)
         planning.ensure_reservations(request.user, prefs, now)
-    return JsonResponse({"workdays": prefs.planning_workdays, "rules": [
+    reviews.ensure_daily(request.user, prefs, now)
+    return JsonResponse({"daily_review_enabled": prefs.daily_review_enabled, "daily_review_minutes": prefs.daily_review_minutes, "workdays": prefs.planning_workdays, "rules": [
         {"period": period, "enabled": rule.enabled, "weekday": rule.weekday, "trigger_mode": rule.trigger_mode,
          "day_of_month": rule.day_of_month, "time": str(rule.time)[:5], "minutes": rule.minutes}
         for period in ["week", "month", "quarter"] for rule in [planning.rule_for(request.user, period)]]})
@@ -997,4 +1008,10 @@ def settings_save(request, data, prefs, now, active):
     ]:
         setattr(prefs, field, integer(data, field, low, high))
     prefs.save()
+    reviews.ensure_daily(request.user, prefs, now)
     return JsonResponse({"ok": True})
+
+
+@api(["GET"])
+def period_review(request, data, prefs, now, active):
+    return JsonResponse(reviews.detail(request.user, prefs, now, request.GET.get("period", "day"), parse_day(request.GET["date"])))

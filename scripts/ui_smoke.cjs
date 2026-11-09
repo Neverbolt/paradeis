@@ -155,6 +155,9 @@ async function checkPeriodPlanningUI(w) {
   assert.equal(months()[0].querySelector('.period-goals textarea'),null);
   assert(months()[0].querySelector('.period-goals strong').textContent.includes('**A defined October outcome**'));
   months()[1].querySelector('.period-goals button').click();
+  await waitFor(()=>$('period-review-dialog').open&&!$('period-review-text').disabled,'review before next month goals');
+  assert.equal($('period-review-text').value,'*October reflection*');
+  $('period-review-skip').click();
   await waitFor(()=>$('period-goal-dialog').open&&!$('period-goal-text').disabled,'next month editor');
   assert($('period-goal-previous').textContent.includes('A defined October outcome'));
   $('period-goal-close').click();
@@ -200,6 +203,8 @@ async function checkPlanningTimerUI(w) {
   assert.equal($('timer-main').textContent,'Start planning');assert.equal($('timer-main').disabled,false);
   boundaryStart=undefined;$('timer-main').click();
   await waitFor(()=>boundaryStart?.block_id===block.id&&!w.eval('busy'),'start reserved planning timer');
+  await waitFor(()=>$('period-goal-dialog').open&&!$('period-goal-text').disabled,'planning timer opens its editor');
+  $('period-goal-close').click();
   const active={id:987124,kind:'focus',planning:true,title:'Weekly planning',status:'running',start,end,
     remaining:1500,elapsed:0,allocations:[],can_overrun:false};
   overrideState=()=>({...original,now:new Date().toISOString(),active,live_block:block,next_block:block});
@@ -640,7 +645,27 @@ async function checkSchedulingUI(w) {
   await checkDayHoursUI(w);
   if (process.env.PARADEIS_SCHEDULING_ONLY === "1") {
     await checkSchedulingUI(w);
-    assert.deepEqual(errors, [], "No JavaScript errors");
+    // Full review uses the same notes, preserves skipped drafts, and carries context.
+  for (const period of ['day','week','month','quarter']) {
+    const date=period==='day'?'2025-01-08':period==='week'?'2025-01-06':'2025-01-01';
+    await w.openPeriodReview(period,date);
+    assert($('period-review-dialog').open);
+    assert.equal($('period-review-context').querySelectorAll('textarea,input,button').length,0);
+    $('period-review-text').value=`*${period} reflection*`;
+    $('period-review-text').dispatchEvent(new w.Event('input',{bubbles:true}));
+    $('period-review-skip').click();
+    await w.openPeriodReview(period,date);
+    assert.equal($('period-review-text').value,`*${period} reflection*`);
+    $('period-review-form').requestSubmit();
+    await waitFor(() => !$('period-review-dialog').open && !w.eval('reviewSaving'),`save ${period} review`);
+    assert.equal((await w.api(`notes/?period=${period}&date=${date}`)).text,`*${period} reflection*`);
+  }
+  await w.showView(true);
+  const reviewButton=w.document.querySelector('#calendar-periods .week-row .note-actions button.text-button');
+  assert(reviewButton);reviewButton.click();
+  await waitFor(()=>$('period-review-dialog').open&&!$('period-review-text').disabled,'Overview opens review');
+  $('period-review-skip').click();
+  assert.deepEqual(errors, [], "No JavaScript errors");
     console.log("PASS: flexible Work defaults, shortening a running pomo, manual breaks, auto focus, and discard stopping the cycle.");
     return;
   }
@@ -960,6 +985,26 @@ async function checkSchedulingUI(w) {
   await w.loadDayNote();
   await waitFor(() => w.eval("!busy"), "mutations settled before closing the test page");
   await checkSchedulingUI(w);
+  // Full review uses the same notes, preserves skipped drafts, and carries context.
+  for (const period of ['day','week','month','quarter']) {
+    const date=period==='day'?'2025-01-08':period==='week'?'2025-01-06':'2025-01-01';
+    await w.openPeriodReview(period,date);
+    assert($('period-review-dialog').open);
+    assert.equal($('period-review-context').querySelectorAll('textarea,input,button').length,0);
+    $('period-review-text').value=`*${period} reflection*`;
+    $('period-review-text').dispatchEvent(new w.Event('input',{bubbles:true}));
+    $('period-review-skip').click();
+    await w.openPeriodReview(period,date);
+    assert.equal($('period-review-text').value,`*${period} reflection*`);
+    $('period-review-form').requestSubmit();
+    await waitFor(() => !$('period-review-dialog').open && !w.eval('reviewSaving'),`save ${period} review`);
+    assert.equal((await w.api(`notes/?period=${period}&date=${date}`)).text,`*${period} reflection*`);
+  }
+  await w.showView(true);
+  const reviewButton=w.document.querySelector('#calendar-periods .week-row .note-actions button.text-button');
+  assert(reviewButton);reviewButton.click();
+  await waitFor(()=>$('period-review-dialog').open&&!$('period-review-text').disabled,'Overview opens review');
+  $('period-review-skip').click();
   assert.deepEqual(errors, [], "No JavaScript errors");
   console.log(
     "PASS: login, tasks, timer, pause/resume, freeform sand review, overrun, notification, recurring blocks, bounded calendar, and day/week/month notes.",

@@ -174,3 +174,11 @@ static/         Responsive CSS and dependency-free browser UI
 ```
 
 SQLite transactions use `IMMEDIATE` mode to serialize writes; a conditional unique database constraint enforces one running/paused session per user. The session/task relationship is a separate allocation model, so future categories, projects, recurring intentions, or richer effort distributions can be added without flattening historical data. For a larger deployment, move to PostgreSQL and replace the SQLite transaction strategy with row-level locking before adding multiple workers or replicas.
+
+## Reviews
+
+Review edits the existing day/week/month/quarter notes. Overview keeps its inline notes and adds a Review button for the paired-panel editor. The left panel shows the day's compact timeline, a week's daily notes, a month's weekly notes (including intersecting boundary weeks), or a quarter's monthly notes. Both panels belong to one dialog; on small screens the reference panel stacks above the editor. Existing notes and unsaved local note drafts are reused. Ctrl/Cmd+Enter saves.
+
+Before setting period goals, the previous period can be reviewed in the same review-and-planning cycle. Skip review defers the prompt for this visit; missing reviews return on another visit. Daily reminders only consider yesterday with activity, never an accumulating backlog. Working-day calendars, holidays, and the previous active workday rule are deferred to [issue #28](https://github.com/Neverbolt/paradeis/issues/28).
+
+Settings → Planning schedule enables daily review reservations (on by default, 15 minutes). The reservation ends at the configured day end, follows changed day hours while automatic and untracked, and can be moved or cancelled in the daily review popup. Manual moves stop automatic following; cancellation persists for that day; tracked pomos stay fixed. Conflicts wait for an explicit choice, and starting a review reservation opens its editor. Daily review reservations are created for the current visited day and individually viewed future days; this is not yet a working-day or holiday calendar.
