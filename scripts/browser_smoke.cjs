@@ -168,7 +168,7 @@ fs.mkdirSync("test-results", { recursive: true });
     const octoberNote=page.locator('#calendar-periods [data-period="month:2026-10-01"] textarea');
     await octoberNote.fill('*October reflection*');
     await octoberNote.press('Control+Enter');
-    await waitFor(()=>document.querySelector('#calendar-periods [data-period="month:2026-10-01"] .note-actions').textContent.includes('Saved'));
+    await waitFor(()=>document.querySelector('#calendar-periods [data-period="month:2026-10-01"] [data-note-status]').textContent.includes('Saved'));
     assert.equal(await page.locator('#calendar-periods [data-period="month:2026-10-01"] .markdown-mirror em').textContent(),'*October reflection*');
     for(const width of [1280,390]) {
       await page.setViewportSize({width,height:width===390?844:800});
@@ -539,7 +539,6 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator("#day-note").inputValue(),
       "Keep this draft through navigation",
     );
-    await page.locator("#day-note-form button").click();
     await waitFor(
       () => document.querySelector("#day-note-status").textContent === "Saved",
     );
@@ -886,6 +885,25 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator('#period-review-text').fill('Reviewed before planning the next week.');
     await page.locator('#period-review-text').press('Control+Enter');
     await waitFor(()=>!reviewSaving&&!document.querySelector('#period-review-dialog').open);
+    // Real autosave failure/retry presentation at desktop and phone sizes.
+    await page.evaluate(() => openPeriodReview('day', state.today));
+    await waitFor(()=>!document.querySelector('#period-review-text').disabled);
+    await page.evaluate(() => {
+      window.originalAutosaveApi=api;
+      api=async(path,body)=>{if(path==='notes/'&&body)throw new Error('Offline');return originalAutosaveApi(path,body);};
+    });
+    await page.locator('#period-review-text').fill('Keep this review through a connection failure.');
+    await page.waitForSelector('#period-review-status.note-save-error');
+    for (const width of [1280,390]) {
+      await page.setViewportSize({width,height:844});
+      assert(await page.locator('#period-review-dialog').evaluate(dialog=>dialog.scrollWidth<=dialog.clientWidth+1));
+      await page.screenshot({path:`test-results/notes-autosave-error-${width}.png`});
+    }
+    await page.evaluate(() => {api=originalAutosaveApi;});
+    await page.locator('#period-review-status').click();
+    await waitFor(()=>document.querySelector('#period-review-status').textContent==='Saved');
+    await page.locator('#period-review-save').click();
+    await waitFor(()=>!document.querySelector('#period-review-dialog').open);
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

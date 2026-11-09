@@ -1561,29 +1561,74 @@ async function loadDayNote() {
   if (selectedDay !== day) return;
   $("day-note").value = drafts.get(key) ?? n.text;
   paintMarkdown($("day-note"));
-  $("day-note-status").textContent = drafts.has(key) ? "Unsaved" : "";
+  $("day-note").dataset.note = key;
+  $("day-note-status").dataset.noteStatus = key;
+  paintNoteStatus(key);
 }
-$("day-note").oninput = () => {
-  drafts.set(`day:${selectedDay}`, $("day-note").value);
-  $("day-note-status").textContent = "Unsaved";
-};
-async function saveNote(period, day, textarea, status) {
-  const key = `${period}:${day}`,
-    text = textarea.value;
-  try {
-    await api("notes/", { period, date: day, text });
-    noteReads.set(key, (noteReads.get(key) || 0) + 1);
-    savedNotes.set(key, text);
-    if (drafts.get(key) === text) drafts.delete(key);
-    if (calendarData) calendarData.notes[key] = text;
-    status.textContent = drafts.has(key) ? "Unsaved" : "Saved";
-  } catch (e) {
-    showError(e);
+const noteSaves = new Map();
+function noteSaveState(key) {
+  if (!noteSaves.has(key)) noteSaves.set(key, {timer:null, pending:null, error:false, saved:false});
+  return noteSaves.get(key);
+}
+function paintNoteStatus(key) {
+  const state = noteSaveState(key);
+  const text = state.error ? "Saving failed — changes not saved. Click to retry." :
+    state.pending ? "Saving…" : drafts.has(key) ? "Unsaved" : state.saved ? "Saved" : "";
+  for (const status of document.querySelectorAll('[data-note-status]')) {
+    if (status.dataset.noteStatus !== key) continue;
+    status.textContent = text;
+    status.classList.toggle('note-save-error', state.error);
+    status.setAttribute('role', state.error ? 'alert' : 'status');
+    status.onclick = state.error ? () => flushNote(key) : null;
+    status.tabIndex = state.error ? 0 : -1;
+    status.onkeydown = event => {
+      if (state.error && ['Enter', ' '].includes(event.key)) {event.preventDefault();flushNote(key);}
+    };
   }
+}
+function editNote(key, text) {
+  const state = noteSaveState(key);
+  drafts.set(key, text);
+  noteReads.set(key, (noteReads.get(key) || 0) + 1);
+  clearTimeout(state.timer);
+  state.timer = setTimeout(() => flushNote(key), 700);
+  paintNoteStatus(key);
+  for (const input of document.querySelectorAll('textarea[data-note]')) {
+    if (input.dataset.note === key && input.value !== text) {input.value=text;paintMarkdown(input);}
+  }
+}
+async function flushNote(key) {
+  const state = noteSaveState(key);
+  clearTimeout(state.timer);
+  if (state.pending) {await state.pending;return state.error ? false : flushNote(key);}
+  if (!drafts.has(key)) return true;
+  const text = drafts.get(key), [period, date] = key.split(':');
+  state.error = false;
+  state.pending = (async () => {
+    try {
+      await api('notes/', {period, date, text});
+      noteReads.set(key, (noteReads.get(key) || 0) + 1);
+      savedNotes.set(key, text);
+      if (drafts.get(key) === text) drafts.delete(key);
+      if (calendarData) calendarData.notes[key] = text;
+      state.saved = true;
+    } catch (error) {state.error = true;}
+  })();
+  paintNoteStatus(key);
+  await state.pending;
+  state.pending = null;
+  paintNoteStatus(key);
+  return !state.error && (!drafts.has(key) || await flushNote(key));
+}
+$("day-note").oninput = () => editNote(`day:${selectedDay}`, $("day-note").value);
+async function saveNote(period, day, textarea) {
+  const key = `${period}:${day}`;
+  editNote(key, textarea.value);
+  return flushNote(key);
 }
 $("day-note-form").onsubmit = (e) => {
   e.preventDefault();
-  saveNote("day", selectedDay, $("day-note"), $("day-note-status"));
+  saveNote("day", selectedDay, $("day-note"));
 };
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || !(e.ctrlKey || e.metaKey) || e.altKey ||
@@ -1603,7 +1648,7 @@ function noteEditor(period, day, summary, title) {
   heading.append(el("h2", "", title), el("span", "small muted"));
   if (period !== "quarter") renderStats(heading.lastChild, summary);
   wrapper.append(heading);
-  if (period !== "day") wrapper.append(goalCard(period,day), el("h3", "notes-label", "Notes"));
+  if (period !== "day") wrapper.append(goalCard(period,day));
   const form = el("form"),
     textarea = el("textarea");
   textarea.rows = 2;
@@ -1614,15 +1659,14 @@ function noteEditor(period, day, summary, title) {
   textarea.value =
     drafts.get(key) ?? savedNotes.get(key) ?? calendarData.notes[key] ?? "";
   const actions = el("div", "note-actions"),
-    status = el("span", "small muted", drafts.has(key) ? "Unsaved" : "");
+    status = el("span", "small muted");
+  status.dataset.noteStatus = key;
   status.setAttribute("aria-live", "polite");
-  textarea.oninput = () => {
-    drafts.set(key, textarea.value);
-    status.textContent = "Unsaved";
-  };
-  const save = el("button", "secondary small", "Save");
-  save.type = "submit";
-  actions.append(status, button("Review", "text-button small", () => openPeriodReview(period,day), `Review ${period} ${day}`), save);
+  const label = el('div', 'section-heading notes-heading');
+  label.append(el('label', 'notes-label', 'Notes'), status);
+  wrapper.append(label);
+  textarea.oninput = () => editNote(key, textarea.value);
+  actions.append(button("Review", "text-button small", () => openPeriodReview(period,day), `Review ${period} ${day}`));
   form.append(textarea, actions);
   form.onsubmit = (e) => {
     e.preventDefault();
@@ -1630,6 +1674,7 @@ function noteEditor(period, day, summary, title) {
   };
   wrapper.append(form);
   enhanceMarkdown(textarea);
+  queueMicrotask(() => paintNoteStatus(key));
   return wrapper;
 }
 async function changeDay(day) {
@@ -1680,6 +1725,7 @@ function stride() {
 }
 async function loadCalendar({ target, preserve = false } = {}) {
   const version = ++historyVersion,
+    noteVersions = new Map(noteReads),
     oldStart = calendarData?.days[0].date,
     oldScroll = $("calendar-scroll").scrollLeft;
   loadingCalendar = true;
@@ -1689,8 +1735,10 @@ async function loadCalendar({ target, preserve = false } = {}) {
     const data = await api(`history/?start=${first}&end=${last}`);
     if (version !== historyVersion) return;
     calendarData = data;
-    for (const [key, value] of Object.entries(data.notes))
-      savedNotes.set(key, value);
+    for (const [key, value] of Object.entries(data.notes)) {
+      if ((noteReads.get(key) || 0) === (noteVersions.get(key) || 0)) savedNotes.set(key, value);
+      else if (savedNotes.has(key)) data.notes[key] = savedNotes.get(key);
+    }
     renderCalendar();
     if (preserve && oldStart) {
       const delta = (Date.parse(first) - Date.parse(oldStart)) / 86400000;

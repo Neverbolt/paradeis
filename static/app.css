@@ -1364,3 +1364,7 @@ dialog::backdrop {
 #review-slot-fields {margin-top:12px;}
 #review-slot-fields summary {cursor:pointer;font-size:12px;color:var(--green);}
 @media(max-width:720px){.period-review-dialog[open]{display:flex;flex-direction:column;gap:12px;}.review-context-panel,.review-main-panel{width:100%;padding:18px;}.review-context-panel{max-height:30dvh;}.review-main-panel{flex-shrink:0;}}
+
+.notes-heading {justify-content:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+.notes-heading label {margin:0;}
+.note-save-error {color:#b42318 !important;background:#fee4e2;border:1px solid #d92d20;border-radius:5px;padding:4px 8px;font-weight:700;cursor:pointer;}
