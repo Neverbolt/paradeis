@@ -547,6 +547,11 @@ function timelineCard(item) {
       : item.status === "completed"
         ? button("", cls, () => openReview(item), `Review ${item.title}`)
         : el("div", cls);
+  if (item.type === 'session' && item.status !== 'completed') {
+    card.append(button('Delete', 'text-button small danger', async () => {
+      if(confirm('Delete this running session and stop its timer?')) await mutate(`sessions/${item.id}/delete/`,{});
+    }));
+  }
   card.append(el("p", "", item.title));
   if (item.allocations?.length > 1) {
     const chips = el("div", "allocation-chips");
@@ -630,11 +635,17 @@ function cleanupPayload(item, start, end) {
 }
 function openCleanup(item, start, end) {
   cleanupEditing = cleanupPayload(item, start, end);
+  $("cleanup-delete").hidden = !item || item.type === "new";
   for (const field of ['date','start','end','kind','title']) $( `cleanup-${field}` ).value = cleanupEditing[field];
   for (const field of ['kind','title']) $( `cleanup-${field}` ).disabled = !!item;
   openDialog($('cleanup-dialog'));
   $(item ? 'cleanup-start' : 'cleanup-title').focus();
 }
+$('cleanup-delete').onclick = async () => {
+  if(!cleanupEditing?.id || !confirm('Delete this block and any linked recorded session?'))return;
+  const path=cleanupEditing.type==='session' ? `sessions/${cleanupEditing.id}/delete/` : `blocks/${cleanupEditing.id}/`;
+  await mutate(path,{action:'delete'},$('cleanup-dialog'));
+};
 $('cleanup-form').onsubmit = async event => {
   event.preventDefault();
   const payload = {...cleanupEditing};
@@ -1231,7 +1242,7 @@ async function timerActionResult(seconds) {
 }
 function openReview(s) {
   reviewing = s;
-  $("review-delete").hidden = s.kind !== "focus";
+  $("review-delete").hidden = false;
   reviewFocus = s.focus_score ?? null;
   $("review-focus").hidden = s.kind !== "focus";
   renderReviewFocus();
@@ -1360,7 +1371,7 @@ $("review-form").onsubmit = async (e) => {
 $("review-overrun").onclick = () =>
   mutate("timer/", { action: "overrun", id: reviewing.id }, $("review-dialog"));
 $("review-delete").onclick = async () => {
-  if (!confirm("Delete this pomo and its sand/focus ratings?")) return;
+  if (!confirm("Delete this session and its ratings? Its linked reservation will also be removed.")) return;
   if (await mutate(`sessions/${reviewing.id}/delete/`, {}, $("review-dialog")))
     reviewing = null;
 };

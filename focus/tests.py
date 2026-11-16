@@ -339,7 +339,7 @@ class AppTests(TestCase):
             409,
         )
         self.assertEqual(
-            self.post(f"/api/blocks/{block.id}/", {"action": "delete"}).status_code, 409
+            self.post(f"/api/blocks/{block.id}/", {"action": "delete"}).status_code, 200
         )
 
     def test_review_supports_multiple_tasks_and_counts_effort_once(self):
@@ -385,17 +385,33 @@ class AppTests(TestCase):
         self.assertFalse(self.task.done)
         self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 200)
 
-    def test_delete_cannot_touch_running_foreign_or_meeting_sessions(self):
+    def test_delete_running_and_meeting_sessions_but_not_foreign(self):
         session = self.start()
-        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 409)
         self.client.force_login(self.other)
-        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 404)
+        self.assertEqual(self.post(f'/api/sessions/{session.id}/delete/', {}).status_code,404)
         self.client.force_login(self.user)
-        self.finish(session)
-        session.refresh_from_db()
-        session.kind = "meeting"
-        session.save()
-        self.assertEqual(self.post(f"/api/sessions/{session.id}/delete/", {}).status_code, 404)
+        self.assertEqual(self.post(f'/api/sessions/{session.id}/delete/', {}).status_code,200)
+        session.refresh_from_db();self.assertEqual(session.status,'cancelled')
+        self.prefs.refresh_from_db();self.assertFalse(self.prefs.auto_armed)
+        block=self.block(start=time(9),end=time(10))
+        meeting=self.start(block_id=block.id)
+        self.finish(meeting,NOW+timedelta(minutes=15))
+        self.assertEqual(self.post(f'/api/sessions/{meeting.id}/delete/',{},NOW+timedelta(minutes=16)).status_code,200)
+        block.refresh_from_db();meeting.refresh_from_db()
+        self.assertTrue(block.deleted);self.assertTrue(block.fixed)
+        self.assertEqual(meeting.status,'cancelled');self.assertIsNone(meeting.break_until)
+        self.assertEqual(self.post(f'/api/sessions/{meeting.id}/delete/',{}).status_code,200)
+
+    def test_delete_tracked_block_stops_timer_and_keeps_other_users_safe(self):
+        block=self.block(start=time(9),end=time(10))
+        session=self.start(block_id=block.id)
+        self.client.force_login(self.other)
+        self.assertEqual(self.post(f'/api/blocks/{block.id}/',{'action':'delete'}).status_code,404)
+        self.client.force_login(self.user)
+        self.assertEqual(self.post(f'/api/blocks/{block.id}/',{'action':'delete'}).status_code,200)
+        session.refresh_from_db();block.refresh_from_db()
+        self.assertEqual(session.status,'cancelled');self.assertTrue(block.deleted)
+        self.assertEqual(self.start().kind,'focus')
 
     def test_manual_pomo_records_elapsed_time_without_starting_a_timer(self):
         self.prefs.auto_focus = self.prefs.auto_armed = True

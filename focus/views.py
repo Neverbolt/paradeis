@@ -740,16 +740,35 @@ def cleanup_time(request, data, prefs, now, active):
     return JsonResponse({'ok': True})
 
 
-@api(["POST"])
-def session_delete(request, data, prefs, now, active, pk):
-    session = Session.objects.get(user=request.user, pk=pk, kind="focus")
-    if session.status not in ["completed", "cancelled"]:
-        raise Conflict("Finish or discard the running timer first.")
-    session.status = "cancelled"
+def discard_session(session, prefs, now):
+    if session.status in ['running', 'paused']:
+        close_task_span(session, now)
+        session.ended_at = now
+        prefs.auto_armed = False
+        prefs.save(update_fields=['auto_armed'])
+    session.status = 'cancelled'
     session.break_until = None
     session.pending_break_seconds = 0
-    session.save(update_fields=["status", "break_until", "pending_break_seconds"])
-    return JsonResponse({"ok": True})
+    session.save()
+
+
+def discard_block(block, prefs, now):
+    for session in block.session_set.exclude(status='cancelled'):
+        discard_session(session, prefs, now)
+    if block.goal_plan_id:
+        block.goal_plan.reservation_skipped = True
+        block.goal_plan.save(update_fields=['reservation_skipped'])
+    block.deleted, block.fixed = True, True
+    block.save(update_fields=['deleted', 'fixed'])
+
+
+@api(["POST"])
+def session_delete(request, data, prefs, now, active, pk):
+    session = Session.objects.get(user=request.user, pk=pk)
+    if session.block_id:
+        discard_block(session.block, prefs, now)
+    discard_session(session, prefs, now)
+    return JsonResponse({'ok': True})
 
 
 @api(["POST"])
@@ -797,25 +816,15 @@ def block_save(request, data, prefs, now, active, pk=None):
         if pk
         else Block(user=request.user)
     )
-    if pk and block.session_set.exclude(status="cancelled").exists():
-        raise Conflict("A tracked reservation cannot be rescheduled or deleted.")
-    if block.goal_plan_id:
-        if data.get("action") != "delete":
-            raise Conflict("Use the planning dialog to change this reservation.")
-        block.goal_plan.reservation_skipped = True
-        block.goal_plan.save(update_fields=["reservation_skipped"])
-        block.deleted = True
-        block.save(update_fields=["deleted"])
-        return JsonResponse({"ok": True})
-    if data.get("action") == "delete":
+    if data.get('action') == 'delete':
         if not pk:
-            raise ValueError("Choose a block to delete.")
-        if block.template_id:
-            block.deleted, block.fixed = True, True
-            block.save(update_fields=["deleted", "fixed"])
-        else:
-            block.delete()
-        return JsonResponse({"ok": True})
+            raise ValueError('Choose a block to delete.')
+        discard_block(block, prefs, now)
+        return JsonResponse({'ok': True})
+    if pk and block.session_set.exclude(status='cancelled').exists():
+        raise Conflict('A tracked reservation must be edited through Cleanup mode.')
+    if block.goal_plan_id:
+        raise Conflict('Use the planning dialog to change this reservation.')
     block.date = parse_day(data["date"])
     block.timezone = prefs.timezone
     block.start, block.end = clock(data["start"]), clock(data["end"])
