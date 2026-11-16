@@ -937,6 +937,19 @@ fs.mkdirSync("test-results", { recursive: true });
     }
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('.cleanup-toolbar').count(),0);
+    await page.evaluate(async()=>{
+      await api('cleanup/',{type:'new',kind:'meeting',title:'Delete completed meeting',date:'2001-01-15',start:'12:00',end:'12:30'});
+      await refresh();
+      const block=state.day.blocks.find(b=>b.title==='Delete completed meeting');
+      const result=await api('timer/',{action:'record_meeting',block_id:block.id});
+      openReview(result.session);
+    });
+    await page.waitForSelector('#review-dialog[open]');
+    assert(await page.locator('#review-delete').isVisible());
+    page.once('dialog',dialog=>dialog.accept());
+    await page.locator('#review-delete').click();
+    await waitFor(()=>!busy&&!document.querySelector('#review-dialog').open);
+    assert(await page.evaluate(()=>!state.day.sessions.some(s=>s.title==='Delete completed meeting')&&!state.day.blocks.some(b=>b.title==='Delete completed meeting')));
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",
