@@ -620,6 +620,87 @@ function dayBoundary(day, field) {
   return marker;
 }
 
+let cleanupMode = false, cleanupDragging = false, cleanupEditing = null, cleanupSuppressClick = 0;
+function cleanupClock(value) {
+  return new Intl.DateTimeFormat('en-GB',{timeZone:state.preferences.timezone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value));
+}
+function cleanupPayload(item, start, end) {
+  return {type:item?.type || 'new', id:item?.id, date:localDate(start),
+    start:cleanupClock(start), end:cleanupClock(end), kind:item?.kind || 'focus', title:item?.title || ''};
+}
+function openCleanup(item, start, end) {
+  cleanupEditing = cleanupPayload(item, start, end);
+  for (const field of ['date','start','end','kind','title']) $( `cleanup-${field}` ).value = cleanupEditing[field];
+  for (const field of ['kind','title']) $( `cleanup-${field}` ).disabled = !!item;
+  openDialog($('cleanup-dialog'));
+  $(item ? 'cleanup-start' : 'cleanup-title').focus();
+}
+$('cleanup-form').onsubmit = async event => {
+  event.preventDefault();
+  const payload = {...cleanupEditing};
+  for (const field of ['date','start','end','kind','title']) payload[field] = $( `cleanup-${field}` ).value;
+  await mutate('cleanup/', payload, $('cleanup-dialog'));
+};
+document.addEventListener('keydown', event => {
+  if (event.repeat || event.isComposing || event.ctrlKey || event.metaKey || event.altKey ||
+      event.target.closest?.('input,textarea,select,[contenteditable]') || document.querySelector('dialog[open]') ||
+      !state || overviewVisible || dayTimelineMode() !== 'calendar' || busy) return;
+  if (event.key.toLowerCase() === 'c' || (event.key === 'Escape' && cleanupMode)) {
+    event.preventDefault();cleanupMode = event.key === 'Escape' ? false : !cleanupMode;
+    renderTimeline($('timeline'),state.day);
+  }
+});
+function cleanupControls(row, item, canvas, origin, scale, edges) {
+  if (item.type === 'plan' && item.kind === 'break') item={...item,type:'new'};
+  if (item.type === 'plan' || (item.type === 'session' && item.status !== 'completed')) return;
+  row.classList.add('cleanup-editable');
+  const snap = value => {
+    const grid = Math.round(value / 300000) * 300000;
+    const near = edges.filter(edge=>Math.abs(edge-value)<=120000).sort((a,b)=>Math.abs(a-value)-Math.abs(b-value))[0];
+    return near ?? grid;
+  };
+  let dragged = false;
+  row.addEventListener('click', event => {
+    event.preventDefault();event.stopImmediatePropagation();
+    if (!dragged) openCleanup(item, Date.parse(item.start), Date.parse(item.end));
+    dragged=false;
+  },true);
+  for (const edge of ['start','end']) {
+    const handle=el('span',`cleanup-handle cleanup-${edge}`);
+    handle.dataset.edge=edge;handle.title=`Drag to change ${edge}`;row.append(handle);
+  }
+  row.addEventListener('pointerdown', event => {
+    if (event.button!==0 || busy) return;
+    event.preventDefault();event.stopPropagation();
+    const edge=event.target.dataset.edge, y=event.clientY, initialScroll=$('timeline').scrollTop;
+    const initialStart=Date.parse(item.start), initialEnd=Date.parse(item.end);
+    let from=initialStart,to=initialEnd;
+    row.setPointerCapture(event.pointerId);cleanupDragging=true;dragged=false;
+    const move = e => {
+      const delta=(e.clientY-y+$('timeline').scrollTop-initialScroll)/scale*60000;
+      if(Math.abs(delta)<60000 && !dragged)return;
+      dragged=true;
+      if(edge==='start')from=Math.min(snap(initialStart+delta),to-60000);
+      else if(edge==='end')to=Math.max(snap(initialEnd+delta),from+60000);
+      else {from=snap(initialStart+delta);to=from+initialEnd-initialStart;}
+      row.style.top=`${(from-origin)/60000*scale}px`;row.style.height=`${Math.max(5,(to-from)/60000)*scale}px`;
+      const label=row.querySelector('.day-calendar-range');if(label)label.textContent=`${clock(from)}–${clock(to)}`;
+    };
+    const finish = async e => {
+      row.removeEventListener('pointermove',move);row.removeEventListener('pointerup',finish);row.removeEventListener('pointercancel',finish);
+      cleanupDragging=false;
+      if (!dragged) return;
+      cleanupSuppressClick=Date.now()+500;
+      if (dragged && e.type!=='pointercancel') {
+        if(localDate(from)!==localDate(to)){showError(new Error('Keep the block within one calendar day.'));}
+        else await mutate('cleanup/',cleanupPayload(item,from,to));
+      }
+      renderTimeline($('timeline'),state.day);
+    };
+    row.addEventListener('pointermove',move);row.addEventListener('pointerup',finish);row.addEventListener('pointercancel',finish);
+  });
+}
+
 function dayTimelineMode() {
   return localStorage.getItem("day-timeline-layout") === "calendar" ? "calendar" : "compact";
 }
@@ -629,10 +710,16 @@ for (const mode of ["compact", "calendar"]) $(`timeline-${mode}`).onclick = () =
   renderTimeline($("timeline"), state.day);
 };
 function renderDayCalendar(container, day) {
+  if (cleanupDragging) return;
   const previousScroll = container.scrollTop, firstVisit = container.dataset.calendarDay !== day.date;
   container.replaceChildren();
+  container.classList.toggle('cleanup-mode',cleanupMode);
+  if(cleanupMode){
+    const help=el('div','cleanup-toolbar','Cleanup · Drag to move · Edges to resize · Click a gap to add');
+    help.append(button('Done','text-button small',()=>{cleanupMode=false;renderTimeline(container,day);}));container.append(help);
+  }
   container.dataset.calendarDay = day.date;
-  const all = entries(day), works = day.blocks.filter(item => item.kind === "work");
+  const all = entries(day).filter(item => !cleanupMode || item.type !== "plan" || item.kind === "break"), works = day.blocks.filter(item => item.kind === "work");
   const bounds = [...all, ...works, ...(day.workday ? [day.workday] : [])];
   const earliest = Math.min(...bounds.map(item => Date.parse(item.start)));
   const latest = Math.max(...bounds.map(item => Date.parse(item.end)));
@@ -662,6 +749,7 @@ function renderDayCalendar(container, day) {
     band.style.height = `${Math.max(1, position(work.end) - position(work.start))}px`;
     band.title = `Work · ${work.title} · ${clock(work.start)}–${clock(work.end)}`;
     band.append(el("span", "", `Work · ${work.title}`));
+    if(cleanupMode)cleanupControls(band,{...work,type:"block"},canvas,start,scale,[]);
     canvas.append(band);
   }
   // Tiny entries need one readable line. Include that footprint in overlap lanes.
@@ -700,7 +788,9 @@ function renderDayCalendar(container, day) {
     else if (minutes < 20) row.classList.add("short");
     else if (minutes >= 35) row.classList.add("roomy");
     if (item.type === "plan" && item.kind === "break") row.classList.add("calendar-break");
-    row.append(card); canvas.append(row);
+    row.append(card);
+    if(cleanupMode)cleanupControls(row,item,canvas,start,scale,all.filter(other=>other!==item).flatMap(other=>[Date.parse(other.start),Date.parse(other.end)]));
+    canvas.append(row);
   }
   if (day.workday) for (const field of ["start", "end"]) {
     const marker = dayBoundary(day, field);
@@ -715,6 +805,14 @@ function renderDayCalendar(container, day) {
     marker.setAttribute("aria-label", `Current time ${clock(now())}`);
     canvas.append(marker);
   }
+  if(cleanupMode)canvas.addEventListener('click',event=>{
+    if(Date.now()<cleanupSuppressClick)return;
+    if(event.target.closest('.day-calendar-event,.day-calendar-work,.day-calendar-boundary,.cleanup-toolbar'))return;
+    const minutes=(event.clientY-canvas.getBoundingClientRect().top)/scale;
+    const from=Math.round((start+minutes*60000)/300000)*300000;
+    const next=all.map(item=>Date.parse(item.start)).filter(time=>time>from).sort((a,b)=>a-b)[0];
+    openCleanup(null,from,Math.min(from+state.preferences.focus_minutes*60000,next||Infinity));
+  });
   container.append(canvas);
   container.scrollTop = firstVisit ? 0 : previousScroll;
   // Refreshes preserve manual scrolling, so gaps can be inspected undisturbed.

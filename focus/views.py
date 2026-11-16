@@ -678,6 +678,69 @@ def session_create(request, data, prefs, now, active):
 
 
 @api(["POST"])
+def cleanup_time(request, data, prefs, now, active):
+    """Explicit timeline correction; never change a live timer or its ratings."""
+    def cleanup_clock(value):
+        parsed = time.fromisoformat(value)
+        if parsed.tzinfo or parsed.microsecond:
+            raise ValueError('Use a local time.')
+        return parsed
+    day = parse_day(data['date'])
+    start, end = instant(day, cleanup_clock(data['start']), prefs), instant(day, cleanup_clock(data['end']), prefs)
+    if end <= start or end - start > timedelta(hours=12):
+        raise ValueError('Choose an end after the start, within 12 hours on the same day.')
+    kind = data.get('type')
+    session = block = None
+    if kind == 'session':
+        session = Session.objects.get(user=request.user, pk=integer(data, 'id', 1, 2**53-1), status='completed')
+        block = session.block
+        if end > now:
+            raise ValueError('Recorded work must end in the past.')
+    elif kind == 'block':
+        block = Block.objects.get(user=request.user, pk=integer(data, 'id', 1, 2**53-1), deleted=False)
+        if block.session_set.exclude(status='cancelled').exists():
+            raise Conflict('Edit the recorded session instead of its reservation.')
+    elif kind != 'new':
+        raise ValueError('Choose a recorded session or reservation.')
+    block_kind = block.kind if block else data.get('kind', 'focus')
+    materialize(request.user, day, day, calendar_day(prefs, now))
+    check_room(request.user, prefs, start, end, block.pk if block else None, kind=block_kind)
+    if block_kind != 'work':
+        for other in Session.objects.filter(user=request.user, started_at__lt=end).exclude(status='cancelled'):
+            if session and other.pk == session.pk:
+                continue
+            other_end = other.ended_at or (now + timedelta(seconds=other.remaining_seconds) if other.status == 'paused' else other.deadline)
+            if other_end > start:
+                raise Conflict('This time overlaps recorded work or a running timer.')
+    if kind == 'new':
+        title = text(data, 'title', 200)
+        if not title:
+            raise ValueError('Enter a name.')
+        if block_kind == 'focus':
+            record_focus(request.user, prefs, now, start, (end-start).total_seconds()/60, title)
+        elif block_kind in ['break', 'meeting']:
+            Block.objects.create(user=request.user, date=day, timezone=prefs.timezone,
+                start=cleanup_clock(data['start']), end=cleanup_clock(data['end']), title=title, kind=block_kind, fixed=True)
+        else:
+            raise ValueError('Choose focus, meeting, or break.')
+    if block:
+        block.date, block.timezone = day, prefs.timezone
+        block.start, block.end = cleanup_clock(data['start']), cleanup_clock(data['end'])
+        block.fixed, block.planning_auto = True, False
+        block.save()
+    if session:
+        session.date = local_day(prefs, start)
+        session.started_at = session.resumed_at = start
+        session.deadline = session.ended_at = end
+        session.elapsed_seconds = session.planned_seconds = int((end-start).total_seconds())
+        session.remaining_seconds = 0
+        session.break_until = None
+        session.pending_break_seconds = 0
+        session.save()
+    return JsonResponse({'ok': True})
+
+
+@api(["POST"])
 def session_delete(request, data, prefs, now, active, pk):
     session = Session.objects.get(user=request.user, pk=pk, kind="focus")
     if session.status not in ["completed", "cancelled"]:

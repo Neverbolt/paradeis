@@ -1368,3 +1368,12 @@ dialog::backdrop {
 .notes-heading {justify-content:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
 .notes-heading label {margin:0;}
 .note-save-error {color:#b42318 !important;background:#fee4e2;border:1px solid #d92d20;border-radius:5px;padding:4px 8px;font-weight:700;cursor:pointer;}
+
+.cleanup-toolbar {position:sticky;top:0;z-index:20;background:var(--paper);border:1px dashed var(--green);padding:8px;font-size:11px;display:flex;align-items:center;gap:12px;}
+.cleanup-toolbar button {margin-left:auto;}
+.cleanup-editable {cursor:grab;touch-action:none;outline:1px dashed var(--green);}
+.cleanup-editable .timeline-item {cursor:grab;}
+.cleanup-handle {position:absolute;left:0;right:0;height:8px;z-index:5;cursor:ns-resize;}
+.cleanup-handle::after {content:'';position:absolute;left:45%;right:45%;top:3px;border-top:2px solid var(--green);}
+.cleanup-start {top:0;}.cleanup-end {bottom:0;}
+.cleanup-mode .day-calendar-canvas {cursor:crosshair;}

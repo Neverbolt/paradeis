@@ -29,6 +29,7 @@ urlpatterns = [
     path("api/tasks/reorder/", views.task_reorder),
     path("api/tasks/<int:pk>/", views.task_update),
     path("api/timer/", views.timer),
+    path("api/cleanup/", views.cleanup_time),
     path("api/sessions/", views.session_create),
     path("api/sessions/<int:pk>/delete/", views.session_delete),
     path("api/sessions/<int:pk>/review/", views.review),
