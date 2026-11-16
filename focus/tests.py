@@ -255,6 +255,21 @@ class AppTests(TestCase):
         self.assertEqual(session.kind, "meeting")
         self.assertEqual(session.remaining_seconds, 28 * 60)
 
+    def test_early_meeting_finish_releases_reservation_at_exact_second(self):
+        block = self.block(start=time(9,30), end=time(11))
+        session = self.start(NOW + timedelta(minutes=40), block_id=block.id)
+        end = NOW + timedelta(minutes=50, seconds=17)
+        self.assertEqual(self.finish(session, end).status_code, 200)
+        block.refresh_from_db()
+        self.assertEqual(block.end, time(9,50,17))
+        self.assertTrue(block.fixed)
+        self.assertEqual(self.finish(session, end + timedelta(seconds=10)).status_code, 200)
+        block.refresh_from_db()
+        self.assertEqual(block.end, time(9,50,17))
+        focus = self.start(end, ignore_break=True)
+        self.assertEqual(focus.kind, 'focus')
+        self.assertIsNone(focus.block_id)
+
     def test_meeting_is_one_session_and_cannot_be_started_early_or_twice(self):
         block = self.block(start=time(9, 30), end=time(11))
         self.assertEqual(

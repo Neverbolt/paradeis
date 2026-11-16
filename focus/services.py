@@ -170,6 +170,15 @@ def complete(session, prefs, now):
     session.status = "completed"
     session.ended_at = end
     session.remaining_seconds = 0
+    if session.kind == "meeting" and session.block_id:
+        block = session.block
+        _, reserved_end = block_bounds(block, prefs)
+        if end < reserved_end:
+            # Finish this occurrence at the actual instant, without rounding up
+            # and leaving an invisible reservation until the next minute.
+            block.end = end.astimezone(ZoneInfo(block.timezone)).time().replace(tzinfo=None)
+            block.fixed = True
+            block.save(update_fields=["end", "fixed"])
     count = (
         Session.objects.filter(user=session.user, date=session.date, status="completed").count() + 1
     )
