@@ -904,6 +904,39 @@ fs.mkdirSync("test-results", { recursive: true });
     await waitFor(()=>document.querySelector('#period-review-status').textContent==='Saved');
     await page.locator('#period-review-save').click();
     await waitFor(()=>!document.querySelector('#period-review-dialog').open);
+    await page.setViewportSize({width:1280,height:900});
+    await page.evaluate(async()=>{
+      document.querySelectorAll('dialog[open]').forEach(dialog=>dialog.close());
+      await api('cleanup/',{type:'new',kind:'focus',title:'Cleanup fixture',date:'2001-01-15',start:'09:00',end:'09:25'});
+      await changeDay('2001-01-15');
+      localStorage.setItem('day-timeline-layout','calendar');renderTimeline(document.querySelector('#timeline'),state.day);
+    });
+    await page.locator('body').click({position:{x:1,y:1}});
+    await page.keyboard.press('c');
+    await page.waitForSelector('.cleanup-toolbar');
+    const cleanupCard=page.locator('.cleanup-editable').filter({hasText:'Cleanup fixture'});
+    await cleanupCard.click();
+    await page.waitForSelector('#cleanup-dialog[open]');
+    await page.locator('#cleanup-end').fill('09:30:00');
+    await page.locator('#cleanup-form button[type=submit]').click();
+    await waitFor(()=>!busy&&!document.querySelector('#cleanup-dialog').open);
+    await cleanupCard.scrollIntoViewIfNeeded();
+    let rect=await cleanupCard.boundingBox();
+    await page.mouse.move(rect.x+rect.width/2,rect.y+rect.height/2);
+    await page.mouse.down();await page.mouse.move(rect.x+rect.width/2,rect.y+rect.height/2+30,{steps:5});await page.mouse.up();
+    await waitFor(()=>!busy&&clock(state.day.sessions[0].start)==='09:10');
+    const handle=cleanupCard.locator('.cleanup-end');
+    rect=await handle.boundingBox();
+    await page.mouse.move(rect.x+rect.width/2,rect.y+4);await page.mouse.down();
+    await page.mouse.move(rect.x+rect.width/2,rect.y+19,{steps:5});await page.mouse.up();
+    await waitFor(()=>!busy&&clock(state.day.sessions[0].end)==='09:45');
+    assert.equal(await page.locator('#cleanup-dialog[open]').count(),0,'Dropping does not open gap editor');
+    for(const width of [1280,390]){
+      await page.setViewportSize({width,height:900});
+      await page.screenshot({path:`test-results/cleanup-${width}.png`});
+    }
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('.cleanup-toolbar').count(),0);
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

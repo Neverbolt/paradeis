@@ -255,6 +255,51 @@ class AppTests(TestCase):
         self.assertEqual(session.kind, "meeting")
         self.assertEqual(session.remaining_seconds, 28 * 60)
 
+    def test_cleanup_corrects_session_and_preserves_review(self):
+        session=self.start()
+        self.finish(session,NOW+timedelta(minutes=10))
+        session.refresh_from_db();session.effort=3;session.focus_score=2;session.reflection='Keep';session.save()
+        payload={'type':'session','id':session.id,'date':'2026-10-07','start':'08:30','end':'08:55:17'}
+        response=self.post('/api/cleanup/',payload,NOW+timedelta(hours=1))
+        self.assertEqual(response.status_code,200,response.content)
+        session.refresh_from_db()
+        self.assertEqual(session.elapsed_seconds,1517)
+        self.assertEqual((session.effort,session.focus_score,session.reflection),(3,2,'Keep'))
+        self.assertEqual(self.post('/api/cleanup/',{**payload,'end':'12:00'},NOW+timedelta(hours=1)).status_code,400)
+        session.refresh_from_db();self.assertEqual(session.elapsed_seconds,1517)
+
+    def test_cleanup_reservations_conflicts_and_live_session_protection(self):
+        block=self.block(start=time(10),end=time(11))
+        payload={'type':'block','id':block.id,'date':'2026-10-07','start':'11:00','end':'11:30'}
+        self.assertEqual(self.post('/api/cleanup/',payload).status_code,200)
+        block.refresh_from_db();self.assertEqual(block.end,time(11,30));self.assertTrue(block.fixed)
+        session=self.start()
+        self.assertEqual(self.post('/api/cleanup/',{**payload,'type':'session','id':session.id}).status_code,404)
+        self.assertEqual(self.post('/api/cleanup/',{**payload,'start':'09:00','end':'09:15'}).status_code,409)
+        self.client.force_login(self.other)
+        self.assertEqual(self.post('/api/cleanup/',payload).status_code,404)
+
+    def test_cleanup_moves_recorded_meeting_and_its_reservation_together(self):
+        block=self.block(start=time(9),end=time(10))
+        session=self.start(block_id=block.id)
+        self.finish(session,NOW+timedelta(minutes=20))
+        payload={'type':'session','id':session.id,'date':'2026-10-07','start':'08:00','end':'08:40'}
+        self.assertEqual(self.post('/api/cleanup/',payload,NOW+timedelta(hours=1)).status_code,200)
+        block.refresh_from_db();session.refresh_from_db()
+        self.assertEqual((block.start,block.end),(time(8),time(8,40)))
+        self.assertEqual(session.elapsed_seconds,2400)
+        other=self.block(start=time(8,45),end=time(9))
+        self.assertEqual(self.post('/api/cleanup/',{**payload,'end':'09:00'},NOW+timedelta(hours=1)).status_code,409)
+        block.refresh_from_db();self.assertEqual(block.end,time(8,40))
+
+    def test_cleanup_adds_past_pomo_and_break(self):
+        payload={'type':'new','kind':'focus','date':'2026-10-07','start':'08:00','end':'08:25','title':'Recovered work'}
+        self.assertEqual(self.post('/api/cleanup/',payload).status_code,200)
+        self.assertEqual(Session.objects.get().elapsed_seconds,1500)
+        self.assertEqual(self.post('/api/cleanup/',payload).status_code,409)
+        self.assertEqual(self.post('/api/cleanup/',{**payload,'kind':'break','start':'08:25','end':'08:30','title':'Rest'}).status_code,200)
+        self.assertEqual(Block.objects.get().kind,'break')
+
     def test_early_meeting_finish_releases_reservation_at_exact_second(self):
         block = self.block(start=time(9,30), end=time(11))
         session = self.start(NOW + timedelta(minutes=40), block_id=block.id)
