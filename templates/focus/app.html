@@ -27,7 +27,7 @@
         <div class="timeline-toolbar"><div class="date-navigation"><button id="day-prev" class="icon-button" aria-label="Previous day">‹</button><button id="go-today" class="quiet small">Today</button><button id="day-next" class="icon-button" aria-label="Next day">›</button><span id="timeline-date"></span></div><button id="block-open" class="secondary small">＋ Block</button></div>
         <div class="day-layout-switch" role="group" aria-label="Day timeline layout"><button id="timeline-compact" type="button" aria-pressed="true">Compact</button><button id="timeline-calendar" type="button" aria-pressed="false">Full day</button></div>
         <div id="timeline" class="timeline"></div>
-        <section class="daily-summary"><div class="section-heading"><h2>Day summary</h2><button id="day-review-open" type="button" class="text-button small">Review</button><span id="day-summary" class="small muted"></span></div><form id="day-note-form"><div class="section-heading notes-heading"><label for="day-note">Notes</label><span id="day-note-status" class="small muted" aria-live="polite"></span></div><textarea id="day-note" rows="2" maxlength="10000" placeholder="Notes"></textarea></form></section>
+        <section class="daily-summary"><div class="section-heading"><h2>Day summary</h2><button id="day-review-open" type="button" class="text-button small">Review</button><span id="day-summary" class="small muted"></span></div><form id="day-note-form"><div class="section-heading notes-heading"><label for="day-note">Notes</label><span id="day-goal-summary" class="day-goal-summary"></span><span id="day-note-status" class="small muted" aria-live="polite"></span></div><textarea id="day-note" rows="2" maxlength="10000" placeholder="Notes"></textarea></form></section>
       </section>
     </div>
     <section id="overview" hidden>
@@ -47,7 +47,7 @@
 <dialog id="day-plan-dialog" class="day-plan-dialog" aria-labelledby="day-plan-title" aria-describedby="day-plan-intro">
   <div class="dialog-heading"><h2 id="day-plan-title">Plan today</h2><span id="day-plan-date" class="small muted"></span></div>
   <p id="day-plan-intro" class="small muted">Choose what matters today.</p>
-  <div id="day-plan-weekly-context"></div>
+  <div id="day-plan-weekly-context"></div><label for="day-plan-focus">Goal for the day</label><input id="day-plan-focus" maxlength="200" placeholder="What would make today a good day?" autocomplete="off">
   <section class="day-plan-section" aria-labelledby="day-plan-goals-title">
     <h3 id="day-plan-goals-title">Today's goals <span id="day-plan-count" class="counter">0</span></h3>
     <div id="day-plan-goals" class="day-plan-list"></div>

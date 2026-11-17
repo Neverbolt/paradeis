@@ -70,11 +70,14 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator('#day-plan-goals button').first().click();
       await waitFor(n => !busy && document.querySelectorAll('#day-plan-goals button').length < n, count);
     }
+    await page.locator('#day-plan-focus').fill('Make the proposal ready to share');
+    await page.screenshot({path:'test-results/daily-goal-planning.png'});
     await page.locator('#day-plan-start').click();
     await waitFor(() => !busy && !document.querySelector('#day-plan-dialog').open);
     await page.reload();
     await page.waitForSelector('.current-time');
     assert.equal(await page.locator('#day-plan-dialog[open]').count(), 0);
+    assert.equal(await page.locator('#day-goal-summary').textContent(),'Make the proposal ready to share');
     await page.setViewportSize({width: 1280, height: 800});
     await page.locator('#timeline-calendar').click();
     await page.waitForSelector('#timeline.day-calendar .day-calendar-canvas');
@@ -950,6 +953,11 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator('#review-delete').click();
     await waitFor(()=>!busy&&!document.querySelector('#review-dialog').open);
     assert(await page.evaluate(()=>!state.day.sessions.some(s=>s.title==='Delete completed meeting')&&!state.day.blocks.some(b=>b.title==='Delete completed meeting')));
+    await page.evaluate(async()=>{await changeDay(state.today);await showView(true);});
+    const dailyGoal=page.locator(`.calendar-day.today .day-goal-summary`);
+    await dailyGoal.scrollIntoViewIfNeeded();
+    assert.equal(await dailyGoal.textContent(),'Make the proposal ready to share');
+    await page.screenshot({path:'test-results/daily-goal-overview.png'});
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

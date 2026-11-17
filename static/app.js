@@ -76,14 +76,20 @@ function month(day, offset = 0) {
   d.setUTCMonth(d.getUTCMonth() + offset);
   return d.toISOString().slice(0, 10);
 }
+const dateFormatters = new Map();
+function cachedDateFormatter(locale,options) {
+  const key=JSON.stringify([locale,options]);
+  if(!dateFormatters.has(key))dateFormatters.set(key,new Intl.DateTimeFormat(locale,options));
+  return dateFormatters.get(key);
+}
 function dateLabel(day, options = {}) {
-  return new Intl.DateTimeFormat(undefined, {
+  return cachedDateFormatter(undefined, {
     timeZone: "UTC",
     ...options,
   }).format(new Date(`${day}T12:00:00Z`));
 }
 function clock(value) {
-  return new Intl.DateTimeFormat("en-GB", {
+  return cachedDateFormatter("en-GB", {
     timeZone: state.preferences.timezone,
     hour: "2-digit",
     minute: "2-digit",
@@ -91,7 +97,7 @@ function clock(value) {
   }).format(new Date(value));
 }
 function localDate(value) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  const parts = cachedDateFormatter("en-CA", {
     timeZone: state.preferences.timezone,
     year: "numeric",
     month: "2-digit",
@@ -204,6 +210,8 @@ async function refresh() {
   calendarAnchor ||= month(data.today);
   $("error").hidden = true;
   renderDay();
+  $("day-goal-summary").textContent=state.day.daily_goal || "";
+  $("day-goal-summary").title=state.day.daily_goal || "";
   renderDayPlan();
   tick();
   clearTimeout(deadlineTimeout);
@@ -225,6 +233,8 @@ async function refresh() {
   }
 }
 let dayPlanSignature = "", dayPlanManual = false;
+const dailyGoalDrafts = new Map();
+$('day-plan-focus').oninput = () => dailyGoalDrafts.set(state.day_plan.date,$('day-plan-focus').value);
 function renderDayPlan() {
   if (renderPeriodPlanning()) return;
   const plan = state?.day_plan, dialog = $("day-plan-dialog");
@@ -239,6 +249,7 @@ function renderDayPlan() {
     if (dialog.open) dialog.close();
     return;
   }
+  $("day-plan-focus").value = dailyGoalDrafts.get(plan.date) ?? plan.goal ?? "";
   $("day-plan-date").textContent = dateLabel(plan.date, {weekday: "short", month: "short", day: "numeric"});
   $("day-plan-previous-date").textContent = dateLabel(plan.previous_date, {month: "short", day: "numeric"});
   $("day-plan-start").textContent = plan.ready ? "Done" : "Start day";
@@ -309,7 +320,9 @@ $("day-plan-start").onclick = async () => {
         $("day-plan-dialog"), false)) return;
     input.value = "";
   }
-  if (await mutate("day-plan/", {date: state.day_plan.date}, $("day-plan-dialog"), false)) {
+  const goalDate=state.day_plan.date, goalText=$("day-plan-focus").value;
+  if (await mutate("day-plan/", {date: goalDate, goal:goalText}, $("day-plan-dialog"), false)) {
+    if(dailyGoalDrafts.get(goalDate)===goalText)dailyGoalDrafts.delete(goalDate);
     dayPlanManual = false;
     renderDayPlan();
     await applyRoute();
@@ -627,7 +640,7 @@ function dayBoundary(day, field) {
 
 let cleanupMode = false, cleanupDragging = false, cleanupEditing = null, cleanupSuppressClick = 0;
 function cleanupClock(value) {
-  return new Intl.DateTimeFormat('en-GB',{timeZone:state.preferences.timezone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value));
+  return cachedDateFormatter('en-GB',{timeZone:state.preferences.timezone,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value));
 }
 function cleanupPayload(item, start, end) {
   return {type:item?.type || 'new', id:item?.id, date:localDate(start),
@@ -1772,7 +1785,12 @@ function noteEditor(period, day, summary, title) {
   status.dataset.noteStatus = key;
   status.setAttribute("aria-live", "polite");
   const label = el('div', 'section-heading notes-heading');
-  label.append(el('label', 'notes-label', 'Notes'), status);
+  label.append(el('label', 'notes-label', 'Notes'));
+  if(period==='day'){
+    const goal=calendarData.days.find(item=>item.date===day)?.daily_goal;
+    if(goal){const text=el('span','day-goal-summary',goal);text.title=goal;label.append(text);}
+  }
+  label.append(status);
   wrapper.append(label);
   textarea.oninput = () => editNote(key, textarea.value);
   actions.append(button("Review", "text-button small", () => openPeriodReview(period,day), `Review ${period} ${day}`));
@@ -1879,6 +1897,7 @@ function completedTasks(day) {
 function renderCalendar() {
   const grid = $("calendar-grid"),
     days = calendarData.days;
+  const fragment=document.createDocumentFragment();
   grid.replaceChildren();
   grid.style.gridTemplateColumns = `repeat(${days.length}, var(--day-width))`;
   days.forEach((day, index) => {
@@ -1905,8 +1924,9 @@ function renderCalendar() {
       noteEditor("day", day.date, day.summary, day.date),
     );
     if (day.completed_tasks?.length || day.goals?.some(t => !t.done)) card.lastChild.prepend(completedTasks(day));
-    grid.append(card);
+    fragment.append(card);
   });
+  grid.append(fragment);
   resizeEditors();
   renderVisiblePeriods(true);
 }
@@ -2242,7 +2262,7 @@ async function notifyEnd(s) {
   }
 }
 window.addEventListener("beforeunload", (e) => {
-  if (drafts.size || taskDrafts.size || goalDrafts.size || $("day-plan-goal").value.trim()) {
+  if (drafts.size || taskDrafts.size || goalDrafts.size || dailyGoalDrafts.size || $("day-plan-goal").value.trim()) {
     e.preventDefault();
     e.returnValue = "";
   }

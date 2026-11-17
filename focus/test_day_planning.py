@@ -16,6 +16,21 @@ from .tests import NOW
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class DayPlanningTests(TestCase):
+    def test_daily_goal_persists_in_dashboard_and_history_and_is_private(self):
+        day=NOW.date().isoformat()
+        result=self.client.post('/api/day-plan/',json.dumps({'date':day,'goal':'Ship the proposal'}),content_type='application/json')
+        self.assertEqual(result.status_code,200)
+        state=self.client.get('/api/state/').json()
+        self.assertEqual(state['day_plan']['goal'],'Ship the proposal')
+        self.assertEqual(state['day']['daily_goal'],'Ship the proposal')
+        history=self.client.get(f'/api/history/?start={day}&end={day}').json()
+        self.assertEqual(history['days'][0]['daily_goal'],'Ship the proposal')
+        self.client.post('/api/day-plan/',json.dumps({'date':day}),content_type='application/json')
+        self.assertEqual(DayPlan.objects.get(user=self.user).goal,'Ship the proposal')
+        self.assertEqual(self.client.post('/api/day-plan/',json.dumps({'date':day,'goal':'x'*201}),content_type='application/json').status_code,400)
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.get(f'/api/history/?start={day}&end={day}').json()['days'][0]['daily_goal'],'')
+
     def setUp(self):
         self.user = get_user_model().objects.create_user("planner")
         self.other = get_user_model().objects.create_user("private")

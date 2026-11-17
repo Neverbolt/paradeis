@@ -188,12 +188,12 @@ def service_worker(request):
     return response
 
 
-def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None, goals=None, hours=None):
+def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=None, goals=None, hours=None, daily_goal=None):
     sessions = (
         list(
             Session.objects.filter(user=user, date=day)
             .exclude(status="cancelled")
-            .prefetch_related("allocations")
+            .select_related("block__goal_plan").prefetch_related("allocations")
         )
         if sessions is None
         else sessions
@@ -211,10 +211,13 @@ def day_data(user, prefs, day, now, sessions=None, blocks=None, completed_tasks=
     if goals is None:
         goals = list(Task.objects.filter(user=user, goal_date=day, archived=False)
                      .values("id", "title", "done"))
+    if daily_goal is None:
+        daily_goal = DayPlan.objects.filter(user=user, date=day).values_list("goal", flat=True).first() or ""
     hours = hours if hours is not None else get_day_hours(prefs, day)
     work_start, work_end = workday_bounds(day, prefs, hours)
     return {
         "date": day.isoformat(),
+        "daily_goal": daily_goal,
         "workday": {"start_time": str(hours.start)[:5], "end_time": str(hours.end)[:5],
                     "start": work_start.isoformat(), "end": work_end.isoformat(),
                     "customized": hours.pk is not None},
@@ -237,7 +240,7 @@ def state(request, data, prefs, now, active):
     )
     pending = (
         Session.objects.filter(user=request.user, status="completed", reviewed=False)
-        .prefetch_related("allocations")
+        .select_related("block__goal_plan").prefetch_related("allocations")
         .order_by("-ended_at")[:10]
     )
     today = local_day(prefs, now)
@@ -249,8 +252,10 @@ def state(request, data, prefs, now, active):
                                      goal_date__isnull=True, completed_on__isnull=True)
                   .values("id", "title", "done", "position", "completed_on", "carried_from_id"))
     previous_day = today - timedelta(days=1)
+    today_plan = DayPlan.objects.filter(user=request.user, date=today).first()
     day_plan = {"date": today.isoformat(),
-                "ready": DayPlan.objects.filter(user=request.user, date=today).exists(),
+                "goal": today_plan.goal if today_plan else "",
+                "ready": today_plan is not None,
                 "previous_date": previous_day.isoformat(),
                 "previous_tasks": list(Task.objects.filter(user=request.user, goal_date=previous_day,
                                                             archived=False).order_by("done", "position", "id")
@@ -265,7 +270,7 @@ def state(request, data, prefs, now, active):
     next_seconds, next_block = next_focus(request.user, prefs, now)
     latest = (
         Session.objects.filter(user=request.user, date=local_day(prefs, now), status="completed")
-        .prefetch_related("allocations")
+        .select_related("block__goal_plan").prefetch_related("allocations")
         .order_by("-ended_at")
         .first()
     )
@@ -318,10 +323,14 @@ def history(request, data, prefs, now, active):
     sessions = list(
         Session.objects.filter(user=request.user, date__range=(start, end))
         .exclude(status="cancelled")
-        .prefetch_related("allocations")
+        .select_related("block__goal_plan").prefetch_related("allocations")
     )
     blocks = list(Block.objects.filter(user=request.user,
         date__range=(start, end + timedelta(days=1)), deleted=False).select_related("goal_plan").prefetch_related("session_set"))
+    sessions_by_day = {}
+    for session in sessions:
+        sessions_by_day.setdefault(session.date, []).append(session)
+    daily_goals = dict(DayPlan.objects.filter(user=request.user, date__range=(start, end)).values_list('date', 'goal'))
     blocks_by_day = {}
     for block in blocks:
         day = local_day(prefs, block_bounds(block, prefs)[0])
@@ -354,11 +363,12 @@ def history(request, data, prefs, now, active):
                     prefs,
                     day,
                     now,
-                    [s for s in sessions if s.date == day],
+                    sessions_by_day.get(day, []),
                     blocks_by_day.get(day, []),
                     completed_by_day.get(day, []),
                     goals_by_day.get(day, []),
                     hours_by_day.get(day, default_hours),
+                    daily_goals.get(day, ""),
                 )
                 for day in days
             ],
@@ -445,7 +455,10 @@ def day_plan_save(request, data, prefs, now, active):
     # An explicit date prevents a stale planning dialog from starting another day.
     if "date" not in data:
         raise ValueError("Choose the day you are planning.")
-    DayPlan.objects.get_or_create(user=request.user, date=day)
+    plan, _ = DayPlan.objects.get_or_create(user=request.user, date=day)
+    if "goal" in data:
+        plan.goal = " ".join(text(data, "goal", 200).split())
+        plan.save(update_fields=["goal"])
     return JsonResponse({"ok": True})
 
 

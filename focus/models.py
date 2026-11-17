@@ -90,6 +90,7 @@ class Task(models.Model):
 
 
 class DayPlan(models.Model):
+    goal = models.CharField(max_length=200, blank=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     date = models.DateField()
     started_at = models.DateTimeField(auto_now_add=True)

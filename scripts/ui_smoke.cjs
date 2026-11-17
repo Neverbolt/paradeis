@@ -634,10 +634,15 @@ async function checkSchedulingUI(w) {
     $("day-plan-goals").querySelector("button").click();
     await waitFor(() => $("day-plan-goals").querySelectorAll("button").length < count && !w.eval("busy"), "remove planning fixture");
   }
+  $('day-plan-focus').value='Make the proposal ready to share';
+  $('day-plan-focus').dispatchEvent(new w.Event('input',{bubbles:true}));
+  await w.refresh();
+  assert.equal($('day-plan-focus').value,'Make the proposal ready to share','Refresh preserves daily goal draft');
   await click("day-plan-start");
   await waitFor(() => !$("day-plan-dialog").open && !w.eval("busy"), "start day");
   await w.refresh();
   assert(!$("day-plan-dialog").open, "Planning completion persists");
+  assert.equal($("day-goal-summary").textContent,"Make the proposal ready to share");
   await require("./sw_smoke.cjs")();
   await checkPeriodPlanningUI(w);
   await checkPlanningTimerUI(w);
