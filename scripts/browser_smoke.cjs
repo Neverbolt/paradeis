@@ -875,6 +875,11 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.evaluate(async()=>{
       await api('notes/',{period:'day',date:shiftDay(monday(state.today),-1),text:'Previous week activity'});
       await api('notes/',{period:'week',date:monday(shiftDay(state.today,-7)),text:''});
+      const snapshot=await api('state/');
+      for(const review of snapshot.planning.reviews){
+        if(review.period==='week'&&review.date===monday(shiftDay(state.today,-7)))continue;
+        await api('notes/',{period:review.period,date:review.date,text:'Other fixture review complete'});
+      }
     });
     await page.reload();
     await waitFor(()=>document.querySelector('#period-review-dialog').open&&!document.querySelector('#period-review-text').disabled);
@@ -958,6 +963,9 @@ fs.mkdirSync("test-results", { recursive: true });
     await dailyGoal.scrollIntoViewIfNeeded();
     assert.equal(await dailyGoal.textContent(),'Make the proposal ready to share');
     await page.screenshot({path:'test-results/daily-goal-overview.png'});
+    await page.setViewportSize({width:1280,height:900});
+    await dailyGoal.scrollIntoViewIfNeeded();
+    await page.screenshot({path:'test-results/daily-goal-overview-desktop.png'});
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",
