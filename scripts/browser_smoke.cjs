@@ -70,11 +70,14 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.locator('#day-plan-goals button').first().click();
       await waitFor(n => !busy && document.querySelectorAll('#day-plan-goals button').length < n, count);
     }
+    await page.locator('#day-plan-focus').fill('Make the proposal ready to share');
+    await page.screenshot({path:'test-results/daily-goal-planning.png'});
     await page.locator('#day-plan-start').click();
     await waitFor(() => !busy && !document.querySelector('#day-plan-dialog').open);
     await page.reload();
     await page.waitForSelector('.current-time');
     assert.equal(await page.locator('#day-plan-dialog[open]').count(), 0);
+    assert.equal(await page.locator('#day-goal-summary').textContent(),'Make the proposal ready to share');
     await page.setViewportSize({width: 1280, height: 800});
     await page.locator('#timeline-calendar').click();
     await page.waitForSelector('#timeline.day-calendar .day-calendar-canvas');
@@ -872,6 +875,11 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.evaluate(async()=>{
       await api('notes/',{period:'day',date:shiftDay(monday(state.today),-1),text:'Previous week activity'});
       await api('notes/',{period:'week',date:monday(shiftDay(state.today,-7)),text:''});
+      const snapshot=await api('state/');
+      for(const review of snapshot.planning.reviews){
+        if(review.period==='week'&&review.date===monday(shiftDay(state.today,-7)))continue;
+        await api('notes/',{period:review.period,date:review.date,text:'Other fixture review complete'});
+      }
     });
     await page.reload();
     await waitFor(()=>document.querySelector('#period-review-dialog').open&&!document.querySelector('#period-review-text').disabled);
@@ -950,6 +958,15 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator('#review-delete').click();
     await waitFor(()=>!busy&&!document.querySelector('#review-dialog').open);
     assert(await page.evaluate(()=>!state.day.sessions.some(s=>s.title==='Delete completed meeting')&&!state.day.blocks.some(b=>b.title==='Delete completed meeting')));
+    await page.evaluate(async()=>{await changeDay(state.today);await showView(true);});
+    const dailyGoal=page.locator(`.calendar-day.today .day-goal-summary`);
+    await dailyGoal.scrollIntoViewIfNeeded();
+    assert.equal(await dailyGoal.textContent(),'Make the proposal ready to share');
+    await page.screenshot({path:'test-results/daily-goal-overview.png'});
+    await page.setViewportSize({width:1280,height:900});
+    await dailyGoal.scrollIntoViewIfNeeded();
+    assert(await dailyGoal.evaluate(el=>el.getBoundingClientRect().right<=el.closest('.calendar-day').getBoundingClientRect().right),'Daily goal stays inside its day column');
+    await page.screenshot({path:'test-results/daily-goal-overview-desktop.png'});
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

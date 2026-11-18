@@ -1377,3 +1377,7 @@ dialog::backdrop {
 .cleanup-handle::after {content:'';position:absolute;left:45%;right:45%;top:3px;border-top:2px solid var(--green);}
 .cleanup-start {top:0;}.cleanup-end {bottom:0;}
 .cleanup-mode .day-calendar-canvas {cursor:crosshair;}
+
+.day-goal-summary {font-size:12px;color:var(--green);font-style:italic;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
+.calendar-day .notes-heading .day-goal-summary {display:block;max-width:100%;font-size:11px;}
+#day-plan-focus {margin-bottom:18px;}
