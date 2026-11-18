@@ -965,6 +965,7 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.screenshot({path:'test-results/daily-goal-overview.png'});
     await page.setViewportSize({width:1280,height:900});
     await dailyGoal.scrollIntoViewIfNeeded();
+    assert(await dailyGoal.evaluate(el=>el.getBoundingClientRect().right<=el.closest('.calendar-day').getBoundingClientRect().right),'Daily goal stays inside its day column');
     await page.screenshot({path:'test-results/daily-goal-overview-desktop.png'});
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
