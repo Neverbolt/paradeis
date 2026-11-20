@@ -967,6 +967,36 @@ fs.mkdirSync("test-results", { recursive: true });
     await dailyGoal.scrollIntoViewIfNeeded();
     assert(await dailyGoal.evaluate(el=>el.getBoundingClientRect().right<=el.closest('.calendar-day').getBoundingClientRect().right),'Daily goal stays inside its day column');
     await page.screenshot({path:'test-results/daily-goal-overview-desktop.png'});
+    await page.setViewportSize({width:1280,height:900});
+    await page.evaluate(async()=>{
+      await api('notes/',{period:'day',date:state.today,text:Array.from({length:35},(_,i)=>`Reflection ${i+1}: All of this text must be included in the exported image, even below the visible timeline.`).join('\n')});
+    });
+    await page.locator('#overview-export-open').click();
+    const exportDay=await page.evaluate(()=>state.today);
+    await page.locator('#overview-export-start').fill(exportDay);
+    await page.locator('#overview-export-end').fill(exportDay);
+    await page.locator('#overview-export-generate').click();
+    await waitFor(()=>!overviewExportBusy&&!!overviewExportBlob);
+    const imageData=await page.evaluate(async()=>{
+      const url=await new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.readAsDataURL(overviewExportBlob);});
+      const bitmap=await createImageBitmap(overviewExportBlob);return {url,width:bitmap.width,height:bitmap.height};
+    });
+    assert(imageData.height>3000,'Long notes expand beyond the visible viewport');
+    fs.writeFileSync('test-results/overview-export-long.png',Buffer.from(imageData.url.split(',')[1],'base64'));
+    const downloadPromise=page.waitForEvent('download');
+    await page.locator('#overview-export-download').click();
+    const download=await downloadPromise;assert(download.suggestedFilename().endsWith('.png'));
+    await context.grantPermissions(['clipboard-read','clipboard-write']);
+    await page.locator('#overview-export-copy').click();
+    await waitFor(()=>document.querySelector('#overview-export-status').textContent.includes('Image copied'));
+    assert(await page.evaluate(async()=> (await navigator.clipboard.read()).some(item=>item.types.includes('image/png'))));
+    await page.screenshot({path:'test-results/overview-export-dialog.png'});
+    await page.locator('#overview-export-start').fill(await page.evaluate(()=>shiftDay(state.today,-2)));
+    await page.locator('#overview-export-generate').click();
+    await waitFor(()=>!overviewExportBusy&&!!overviewExportBlob);
+    const multi=await page.evaluate(()=>new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.readAsDataURL(overviewExportBlob);}));
+    fs.writeFileSync('test-results/overview-export-range.png',Buffer.from(multi.split(',')[1],'base64'));
+    await page.locator('#overview-export-dialog [data-close]').click();
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

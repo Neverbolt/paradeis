@@ -348,7 +348,7 @@ def history(request, data, prefs, now, active):
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     note_rows = list(
         Note.objects.filter(user=request.user).filter(
-            Q(date__range=(start.replace(day=1), end)) | Q(period="quarter", date__range=(period_date("quarter", start), end)))
+            Q(date__range=(min(start.replace(day=1), period_date("week", start)), end)) | Q(period="quarter", date__range=(period_date("quarter", start), end)))
     )
     period_summaries = {}
     for session in sessions:
@@ -375,7 +375,7 @@ def history(request, data, prefs, now, active):
             "summary": summary(sessions),
             "notes": {f"{n.period}:{n.date}": n.text for n in note_rows},
             "period_goals": {f"{g.period}:{g.date}": g.text for g in PeriodGoal.objects.filter(period__in=planning.PERIODS,
-                user=request.user, date__range=(period_date("quarter", start), end))},
+                user=request.user, date__range=(min(period_date("quarter", start), period_date("week", start)), end))},
             "period_summaries": {key: summary(rows) for key, rows in period_summaries.items()},
             "previous": (start - timedelta(days=7)).isoformat(),
             "next": (end + timedelta(days=1)).isoformat(),

@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       DEBUG: "1"
     steps:
@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: node --check static/app.js && node --check static/planning.js && node --check static/reviews.js
+      - run: node --check static/app.js && node --check static/planning.js && node --check static/reviews.js && node --check static/export.js
       - name: Test UI interactions against a disposable local server
         run: |
           npm install --no-save --package-lock=false jsdom@26 playwright@1.51.1

@@ -15,6 +15,14 @@ from .tests import NOW
 
 @override_settings(PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"])
 class PeriodPlanningTests(TestCase):
+    def test_history_includes_week_context_crossing_month_and_quarter_start(self):
+        from .models import Note
+        Note.objects.create(user=self.user,period='week',date=date(2026,9,28),text='Boundary review')
+        PeriodGoal.objects.create(user=self.user,period='week',date=date(2026,9,28),text='Boundary goal')
+        history=self.client.get('/api/history/?start=2026-10-01&end=2026-10-02').json()
+        self.assertEqual(history['notes']['week:2026-09-28'],'Boundary review')
+        self.assertEqual(history['period_goals']['week:2026-09-28'],'Boundary goal')
+
     def setUp(self):
         self.user = get_user_model().objects.create_user("planning")
         self.other = get_user_model().objects.create_user("other-plan")

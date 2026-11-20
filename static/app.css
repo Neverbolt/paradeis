@@ -1381,3 +1381,8 @@ dialog::backdrop {
 .day-goal-summary {font-size:12px;color:var(--green);font-style:italic;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
 .calendar-day .notes-heading .day-goal-summary {display:block;max-width:100%;font-size:11px;}
 #day-plan-focus {margin-bottom:18px;}
+
+.overview-export-dialog {width:min(1000px,calc(100vw - 32px));}
+#overview-export-preview {display:block;width:100%;height:auto;margin-top:16px;border:1px solid var(--line);}
+#overview-export-download {display:inline-block;text-decoration:none;padding:8px 12px;border-radius:6px;}
+#overview-export-status {margin:12px 0;}

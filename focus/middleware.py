@@ -5,7 +5,7 @@ class SecurityHeadersMiddleware:
     def __call__(self, request):
         response = self.get_response(request)
         response["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; "
             "font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; "
             "form-action 'self'; frame-ancestors 'none'"
         )
