@@ -39,15 +39,18 @@ function renderOverviewExport(data,first,last){
       }lines.push(line);
     }return lines;
   };
-  const width= Math.min(7,data.days.length)*312+48, column=296, layouts=[];let y=90;
+  const multiWeek=monday(first)!==monday(last);
+  const leadingDays=multiWeek?(Date.parse(first)-Date.parse(monday(first)))/86400000:0;
+  const slots=[...Array(leadingDays).fill(null),...data.days];
+  const width=(multiWeek?7:data.days.length)*312+48, column=296, layouts=[];let y=90;
   const layout=(rows,x,top,w)=>{
     let cursor=top+18;const items=rows.map(row=>{
       if(row.kind==='metrics'){const item={...row,x:x+16,y:cursor};cursor+=30;return item;}
       const lines=wrap(row.text,w-32,row.kind);const item={...row,lines,x:x+16,y:cursor};cursor+=lines.length*20+(['heading','subheading','note'].includes(row.kind)?12:7);return item;
     });return {x,y:top,w,h:cursor-top+8,items};
   };
-  for(let offset=0;offset<data.days.length;offset+=7){
-    const row=data.days.slice(offset,offset+7).map((day,index)=>layout(exportParagraphs(day,data),24+index*312,y,column));
+  for(let offset=0;offset<slots.length;offset+=7){
+    const row=slots.slice(offset,offset+7).flatMap((day,index)=>day?[layout(exportParagraphs(day,data),24+index*312,y,column)]:[]);
     const height=Math.max(...row.map(card=>card.h));row.forEach(card=>{card.h=height;layouts.push(card);});y+=height+24;
   }
   const periods=new Set();for(const day of data.days){periods.add(`week:${monday(day.date)}`);periods.add(`month:${month(day.date)}`);periods.add(`quarter:${day.date.slice(0,4)}-${String(Math.floor((Number(day.date.slice(5,7))-1)/3)*3+1).padStart(2,'0')}-01`);}
