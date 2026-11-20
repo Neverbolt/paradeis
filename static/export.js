@@ -26,7 +26,7 @@ function exportParagraphs(day,data){
   const stats=day.summary;add(`${Math.floor(stats.seconds/3600)} h ${Math.floor(stats.seconds%3600/60)} min · ${stats.count} sessions`,'muted');
   add('Notes','subheading');add(data.notes[`day:${day.date}`]||'No notes','note');return rows;
 }
-function renderOverviewExport(data,first,last){
+function renderOverviewExport(data,first,last,hideEmpty=false){
   const measure=document.createElement('canvas').getContext('2d');
   const ink='#293529', muted='#788272', green='#627b59', paper='#f8f6ef';
   const font=kind=>`${['heading','subheading','event'].includes(kind)?'600 ':kind==='goal'?'italic ':''}${kind==='heading'?16:kind==='time'||kind==='muted'?12:14}px Arial, sans-serif`;
@@ -41,8 +41,11 @@ function renderOverviewExport(data,first,last){
   };
   const multiWeek=monday(first)!==monday(last);
   const leadingDays=multiWeek?(Date.parse(first)-Date.parse(monday(first)))/86400000:0;
-  const slots=[...Array(leadingDays).fill(null),...data.days];
-  const width=(multiWeek?7:data.days.length)*312+48, column=296, layouts=[];let y=90;
+  // Match the previous-active-day review rule: a session or nonblank daily notes.
+  const selectedDays=data.days.map(day=>!hideEmpty||day.sessions.length||(data.notes[`day:${day.date}`]||'').trim()?day:null);
+  if(!selectedDays.some(Boolean))throw new Error('No active days in this range. Turn off “Hide empty days” to include them.');
+  const slots=multiWeek?[...Array(leadingDays).fill(null),...selectedDays]:selectedDays.filter(Boolean);
+  const width=(multiWeek?7:slots.length)*312+48, column=296, layouts=[];let y=90;
   const layout=(rows,x,top,w)=>{
     let cursor=top+18;const items=rows.map(row=>{
       if(row.kind==='metrics'){const item={...row,x:x+16,y:cursor};cursor+=30;return item;}
@@ -51,6 +54,7 @@ function renderOverviewExport(data,first,last){
   };
   for(let offset=0;offset<slots.length;offset+=7){
     const row=slots.slice(offset,offset+7).flatMap((day,index)=>day?[layout(exportParagraphs(day,data),24+index*312,y,column)]:[]);
+    if(!row.length)continue;
     const height=Math.max(...row.map(card=>card.h));row.forEach(card=>{card.h=height;layouts.push(card);});y+=height+24;
   }
   const periods=new Set();for(const day of data.days){periods.add(`week:${monday(day.date)}`);periods.add(`month:${month(day.date)}`);periods.add(`quarter:${day.date.slice(0,4)}-${String(Math.floor((Number(day.date.slice(5,7))-1)/3)*3+1).padStart(2,'0')}-01`);}
@@ -92,24 +96,24 @@ function initializeOverviewExport(){
   const dialog=$('overview-export-dialog'),status=$('overview-export-status');
   $('overview-export-open').onclick=()=>{if(overviewExportBusy)return;reset();$('overview-export-start').value=calendarWeek||monday(state.today);$('overview-export-end').value=shiftDay($('overview-export-start').value,6);openDialog(dialog);};
   const reset=()=>{dialog.querySelector('.dialog-error').hidden=true;overviewExportBlob=null;$('overview-export-result').hidden=true;if(overviewExportURL){URL.revokeObjectURL(overviewExportURL);overviewExportURL=null;}$('overview-export-preview').removeAttribute('src');status.textContent='';};
-  for(const id of ['overview-export-start','overview-export-end'])$(id).oninput=reset;
+  for(const id of ['overview-export-start','overview-export-end','overview-export-hide-empty'])$(id).oninput=reset;
   $('overview-export-form').onsubmit=async event=>{
     event.preventDefault();if(overviewExportBusy)return;reset();
     const first=$('overview-export-start').value,last=$('overview-export-end').value;
     const count=(Date.parse(last)-Date.parse(first))/86400000+1;
     if(!Number.isFinite(count)||count<1||count>112){showError(new Error('Choose between 1 and 112 days, including both dates.'),dialog);return;}
-    overviewExportBusy=true;for(const id of ['overview-export-start','overview-export-end','overview-export-generate'])$(id).disabled=true;status.textContent='Preparing image…';
+    overviewExportBusy=true;for(const id of ['overview-export-start','overview-export-end','overview-export-hide-empty','overview-export-generate'])$(id).disabled=true;status.textContent='Preparing image…';
     try{
       for(const key of [...drafts.keys()])if(!await flushNote(key))throw new Error('Some notes could not be saved. Retry saving them before exporting.');
       const data=await api(`history/?start=${first}&end=${last}`);
       await new Promise(resolve=>requestAnimationFrame(()=>setTimeout(resolve,0)));
-      const canvas=renderOverviewExport(data,first,last);
+      const canvas=renderOverviewExport(data,first,last,$('overview-export-hide-empty').checked);
       const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));if(!blob)throw new Error('The browser could not create this image. Try a shorter range.');
       overviewExportBlob=blob;overviewExportName=`paradeis-${first}-${last}.png`;overviewExportURL=URL.createObjectURL(blob);
       $('overview-export-preview').src=overviewExportURL;$('overview-export-download').href=overviewExportURL;$('overview-export-download').download=overviewExportName;
       $('overview-export-result').hidden=false;$('overview-export-copy').disabled=!navigator.clipboard?.write||!window.ClipboardItem;
       status.textContent=`${canvas.width.toLocaleString()} × ${canvas.height.toLocaleString()} pixels · PNG${$('overview-export-copy').disabled?' · Copy is unavailable here; download the PNG instead.':''}`;
-    }catch(error){status.textContent='';showError(error,dialog);}finally{overviewExportBusy=false;for(const id of ['overview-export-start','overview-export-end','overview-export-generate'])$(id).disabled=false;}
+    }catch(error){status.textContent='';showError(error,dialog);}finally{overviewExportBusy=false;for(const id of ['overview-export-start','overview-export-end','overview-export-hide-empty','overview-export-generate'])$(id).disabled=false;}
   };
   $('overview-export-copy').onclick=async()=>{
     if(!overviewExportBlob)return;
