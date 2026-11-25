@@ -747,10 +747,27 @@ fs.mkdirSync("test-results", { recursive: true });
       await waitFor(() => !busy && !state.preferences.auto_break);
       await page.locator("#timer-main").click();
       await waitFor(() => !busy && state.active?.title === "Strategy");
+      await page.locator("#timer-topic-control summary").click();
       await page.locator("#timer-topic").selectOption("open");
       await waitFor(() => !busy && state.active?.title === "Open focus");
+      await page.locator("#timer-topic-control summary").click();
       await page.locator("#timer-topic").selectOption("");
       await waitFor(() => !busy && state.active?.title === "Strategy");
+      assert.equal(await page.locator('#timer-task').isVisible(), false);
+      assert.equal(await page.locator('#timer-tasks .pill-label').textContent(), 'Strategy');
+      await page.locator('#timer-tasks .pill-remove').click();
+      await waitFor(() => !busy && !state.active.live_tasks.length);
+      assert.equal(await page.locator('#timer-tasks').textContent(), 'No tasks included');
+      await page.reload();
+      await waitFor(() => !!state?.active && !busy);
+      assert.equal(await page.locator('#timer-tasks .pill-remove').count(), 0);
+      await page.locator('#timer-topic-control summary').click();
+      await page.locator('#timer-topic').selectOption('open');
+      await waitFor(() => !busy && state.active?.title === 'Open focus');
+      await page.locator('#timer-topic-control summary').click();
+      await page.locator('#timer-topic').selectOption('');
+      await waitFor(() => !busy && state.active?.title === 'Strategy');
+      await page.screenshot({path:'test-results/live-task-pills.png'});
       const originalEnd = await page.evaluate(() => state.active.end);
       await page.evaluate(async data => {
         await api("blocks/", {kind: "meeting", title: "Strategy call", date: data.date,
@@ -997,6 +1014,23 @@ fs.mkdirSync("test-results", { recursive: true });
     const multi=await page.evaluate(()=>new Promise(resolve=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.readAsDataURL(overviewExportBlob);}));
     fs.writeFileSync('test-results/overview-export-range.png',Buffer.from(multi.split(',')[1],'base64'));
     await page.locator('#overview-export-dialog [data-close]').click();
+    await page.evaluate(async()=>{
+      await showView(false); await changeDay(state.today);
+      const session=state.day.sessions.find(s=>s.status==='completed'&&s.kind==='focus');
+      if(session) await api(`sessions/${session.id}/review/`,{allocations:[{label:'Implementation plans',sand:3},{label:'Handover and follow-up',sand:1}],focus_score:2,reflection:'Ready to share'});
+      await refresh();
+    });
+    const multiCard=page.locator('#timeline .timeline-item').filter({has:page.locator('.allocation-chips')}).first();
+    if(await multiCard.count()) {
+      assert.equal(await multiCard.locator(':scope > p').count(),0);
+      assert.equal(await multiCard.locator('.allocation-chip').count(),2);
+      await multiCard.scrollIntoViewIfNeeded();
+      await page.screenshot({path:'test-results/task-pills-timeline.png'});
+      await page.setViewportSize({width:390,height:844});
+      await multiCard.scrollIntoViewIfNeeded();
+      await page.screenshot({path:'test-results/task-pills-mobile.png'});
+    }
+
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
       "PASS: real Chromium viewport bounds, seven-day width, vertical times, current-time following, and meeting results.",

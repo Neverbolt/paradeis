@@ -325,7 +325,12 @@ async function checkFocusRatingsUI(w) {
   assert.equal(saved.effort, session.effort ?? 0);
   const icons = $("timeline").querySelector('.focus-lenses[aria-label="Focus 3 out of 3"]');
   assert.equal(icons.children.length, 3);
-  assert.equal(icons.parentElement.lastElementChild.className, 'sand-pile');
+  const card = icons.closest('.timeline-item');
+  if (saved.allocations.length > 1) {
+    assert.equal(card.querySelector(':scope > p'), null);
+    assert.equal(card.querySelectorAll('.allocation-chip').length, saved.allocations.length);
+    assert.equal(icons.parentElement.querySelector('.sand-pile'), null);
+  } else assert.equal(icons.parentElement.lastElementChild.className, 'sand-pile');
   w.openReview(saved);
   assert.equal($("focus-control").querySelectorAll('[aria-pressed="true"]').length, 3);
   $("review-dialog").close();

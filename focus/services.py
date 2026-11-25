@@ -135,6 +135,27 @@ def close_task_span(session, now):
         span.save(update_fields=["ended_at"])
 
 
+def focus_topic_key(task_id, label):
+    return f"task:{task_id}" if task_id else f"label:{label}"
+
+
+def live_focus_tasks(session, now):
+    totals = {}
+    current_task, current_label = session_topic(session)
+    current_key = focus_topic_key(current_task.id if current_task else None, current_label)
+    for span in session.task_spans.all():
+        key = focus_topic_key(span.task_id, span.label)
+        if key in session.excluded_topics:
+            continue
+        row = totals.setdefault(key, {"key": key, "task_id": span.task_id, "label": span.label,
+                                      "seconds": 0, "current": False})
+        end = span.ended_at or min(now, session.deadline)
+        row["seconds"] += max(0, (end - span.started_at).total_seconds())
+        row["current"] |= span.ended_at is None or (session.status == "paused" and key == current_key)
+    return [dict(row, qualified=row["seconds"] >= 30) for row in totals.values()
+            if row["current"] or row["seconds"] >= 30]
+
+
 def collect_focus_tasks(session):
     totals = {}
     for span in session.task_spans.filter(ended_at__isnull=False):
@@ -142,7 +163,8 @@ def collect_focus_tasks(session):
         if key not in totals:
             totals[key] = [span, 0]
         totals[key][1] += (span.ended_at - span.started_at).total_seconds()
-    qualifying = [span for span, seconds in totals.values() if seconds >= 30]
+    qualifying = [span for span, seconds in totals.values() if seconds >= 30
+                  and focus_topic_key(span.task_id, span.label) not in session.excluded_topics]
     if not qualifying:
         return  # Keep a useful description for a very short focus session.
     session.allocations.filter(automatic=True).delete()
@@ -444,6 +466,7 @@ def serialize_session(session, now):
         "reviewing_day": bool(session.block_id and session.block.goal_plan_id and session.block.goal_plan.period == "day"),
         "topic_choice": (str(session.selected_task_id) if session.topic_mode == "task"
                          and session.selected_task_id else "open" if session.topic_mode == "open" else ""),
+        "live_tasks": live_focus_tasks(session, now) if session.kind == "focus" and session.status in ["running", "paused"] else [],
         "topic_default": session.work_topic if session.topic_mode == "work" else "",
         "allocations": [
             {"task_id": a.task_id, "label": a.label, "sand": a.sand}

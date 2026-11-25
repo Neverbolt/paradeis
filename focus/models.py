@@ -200,6 +200,7 @@ class Session(models.Model):
     reviewed = models.BooleanField(default=False)
     pending_break_seconds = models.PositiveIntegerField(default=0)
     notify_live = models.BooleanField(default=True)
+    excluded_topics = models.JSONField(default=list, blank=True)
     topic_mode = models.CharField(max_length=8, default="queue")
     work_topic = models.CharField(max_length=200, blank=True)
     selected_task = models.ForeignKey(Task, null=True, blank=True, on_delete=models.SET_NULL,
