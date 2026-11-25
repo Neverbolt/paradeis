@@ -44,6 +44,49 @@ class AppTests(TestCase):
             user=user or self.user, date=day, start=start, end=end, kind=kind, title="Design review"
         )
 
+    def test_live_pills_remove_and_restore_tasks_without_deleting_todos(self):
+        from .services import serialize_session
+        session = self.start()
+        early = serialize_session(session, NOW + timedelta(seconds=10))["live_tasks"]
+        self.assertFalse(early[0]["qualified"])
+        self.assertTrue(early[0]["current"])
+        second = Task.objects.create(user=self.user, goal_date=NOW.date(), title="Second", position=1)
+        self.post("/api/timer/", {"action": "set_topic", "topic": str(second.id)}, NOW + timedelta(seconds=40))
+        session.refresh_from_db()
+        live = serialize_session(session, NOW + timedelta(seconds=50))["live_tasks"]
+        self.assertEqual([row["qualified"] for row in live], [True, False])
+        key = f"task:{self.task.id}"
+        removed = self.post("/api/timer/", {"action": "remove_topic", "key": key}, NOW + timedelta(seconds=60))
+        self.assertEqual(removed.status_code, 200)
+        session.refresh_from_db()
+        self.assertNotIn(key, [row["key"] for row in serialize_session(session, NOW + timedelta(seconds=80))["live_tasks"]])
+        self.finish(session, NOW + timedelta(seconds=90))
+        self.assertEqual(list(session.allocations.values_list("task_id", flat=True)), [second.id])
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.done)
+        self.assertFalse(self.task.archived)
+
+    def test_removed_current_topic_stays_excluded_and_can_be_explicitly_restored(self):
+        from .services import serialize_session
+        session = self.start()
+        key = f"task:{self.task.id}"
+        self.assertEqual(self.post("/api/timer/", {"action": "remove_topic", "key": key}, NOW + timedelta(seconds=5)).status_code, 200)
+        session.refresh_from_db()
+        self.assertEqual(serialize_session(session, NOW + timedelta(seconds=60))["live_tasks"], [])
+        self.assertEqual(self.post("/api/timer/", {"action": "set_topic", "topic": str(self.task.id)}, NOW + timedelta(seconds=65)).status_code, 200)
+        session.refresh_from_db()
+        self.assertEqual(session.excluded_topics, [])
+        self.finish(session, NOW + timedelta(seconds=100))
+        self.assertEqual(list(session.allocations.values_list("task_id", flat=True)), [self.task.id])
+
+    def test_removing_only_task_does_not_reappear_on_finish(self):
+        session = self.start()
+        self.post("/api/timer/", {"action": "remove_topic", "key": f"task:{self.task.id}"}, NOW + timedelta(seconds=35))
+        self.finish(session, NOW + timedelta(seconds=60))
+        self.assertFalse(session.allocations.exists())
+        session.refresh_from_db()
+        self.assertEqual(session.title, "Open focus")
+
     def test_authenticated_shell_and_security_headers(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)

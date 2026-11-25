@@ -43,6 +43,9 @@ from .services import (
     track_top_task,
     close_task_span,
     choose_topic,
+    focus_topic_key,
+    session_topic,
+    live_focus_tasks,
     work_at,
     fit_focus_before,
     pending_break,
@@ -580,12 +583,29 @@ def timer(request, data, prefs, now, active):
             raise Conflict("Automatic breaks are switched off.")
         start_break(request.user, prefs, now)
         return JsonResponse({"ok": True})
+    if action == "remove_topic":
+        if not active or active.kind != "focus" or (active.block_id and active.block.kind == "planning"):
+            raise Conflict("Start a focus timer before removing a task.")
+        key = data.get("key")
+        row = next((row for row in live_focus_tasks(active, now) if row["key"] == key), None)
+        if not row:
+            raise Conflict("This task is no longer in the active pomo.")
+        active.excluded_topics = [*active.excluded_topics, key]
+        for allocation in active.allocations.all():
+            if focus_topic_key(allocation.task_id, allocation.label) == key:
+                allocation.delete()
+        active.title = " + ".join(a.label for a in active.allocations.all())[:200] or "Open focus"
+        active.save(update_fields=["excluded_topics", "title"])
+        return JsonResponse({"ok": True})
     if action == "set_topic":
         if not active or active.kind != "focus" or (active.block_id and active.block.kind == "planning"):
             raise Conflict("Start a focus timer before changing its topic.")
         close_task_span(active, now)
         choose_topic(active, prefs, now, data.get("topic"))
-        active.save(update_fields=["title", "topic_mode", "work_topic", "selected_task"])
+        task, label = session_topic(active)
+        key = focus_topic_key(task.id if task else None, label)
+        active.excluded_topics = [value for value in active.excluded_topics if value != key]
+        active.save(update_fields=["title", "topic_mode", "work_topic", "selected_task", "excluded_topics"])
         track_top_task(active, now)
         return JsonResponse({"ok": True})
     if action == "record_meeting":

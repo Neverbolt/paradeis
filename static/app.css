@@ -1386,3 +1386,18 @@ dialog::backdrop {
 #overview-export-preview {display:block;width:100%;height:auto;margin-top:16px;border:1px solid var(--line);}
 #overview-export-download {display:inline-block;text-decoration:none;padding:8px 12px;border-radius:6px;}
 #overview-export-status {margin:12px 0;}
+
+/* Focus topics and completed task allocations share a compact pill treatment. */
+.timer-tasks {display:flex; flex-wrap:wrap; justify-content:center; gap:6px; margin:12px 0 4px;}
+.timer-task-pill {font-size:12px; padding:5px 8px; border-radius:12px; max-width:100%; border:1px solid var(--line);}
+.pill-label {min-width:0; overflow-wrap:anywhere;}
+.timer-task-pill.current {border-color:var(--green, #627b59);}
+.timer-task-pill.pending {border-style:dashed;}
+.pill-status {font-size:10px; color:var(--muted); white-space:nowrap;}
+.pill-remove {padding:0 3px; min-width:22px; min-height:22px; border:0; background:transparent; color:var(--muted);}
+.pill-remove:hover {color:var(--ink); background:#ffffff90;}
+.timer-topic-control {margin:4px 0 12px; text-align:center;}
+.timer-topic-control summary {cursor:pointer; font-size:11px; color:var(--muted);}
+.timer-topic-control select {margin-top:8px;}
+.allocation-chip {border-radius:8px; padding:3px 6px; max-width:100%; overflow-wrap:anywhere;}
+.allocation-chips {margin-top:0; gap:5px;}

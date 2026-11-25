@@ -565,7 +565,7 @@ function timelineCard(item) {
       if(confirm('Delete this running session and stop its timer?')) await mutate(`sessions/${item.id}/delete/`,{});
     }));
   }
-  card.append(el("p", "", item.title));
+  if (!(item.allocations?.length > 1)) card.append(el("p", "", item.title));
   if (item.allocations?.length > 1) {
     const chips = el("div", "allocation-chips");
     for (const a of item.allocations) {
@@ -597,10 +597,11 @@ function timelineCard(item) {
     if (item.kind === "focus" && item.focus_score > 0) {
       const metrics = el("span", "session-metrics");
       card.classList.add("has-session-metrics", "has-focus-lenses");
-      metrics.append(lenses(item.focus_score), sand(item.effort));
+      metrics.append(lenses(item.focus_score));
+      if (!(item.allocations?.length > 1)) metrics.append(sand(item.effort));
       meta.append(metrics);
     } else {
-      meta.append(sand(item.effort));
+      if (!(item.allocations?.length > 1)) meta.append(sand(item.effort));
       if (item.kind === "focus" && item.focus_score === 0) card.title = "Focus: 0 out of 3";
     }
   }
@@ -802,8 +803,15 @@ function renderDayCalendar(container, day) {
     if (card.tagName !== "BUTTON") card.tabIndex = 0;
     // Calendar cards keep the topic and exact range; stacked compact-view
     // metadata (including redundant duration) cannot fit short time slots.
-    card.querySelector(".allocation-chips")?.remove();
-    const metrics = card.querySelector(".session-metrics") || card.querySelector(".item-meta > .sand-pile");
+    if (card.querySelector(".allocation-chips")) {
+      card.querySelector(".allocation-chips").remove();
+      card.prepend(el("p", "", (item.allocations || []).map(a => a.label).join(" · ")));
+    }
+    let metrics = card.querySelector(".session-metrics") || card.querySelector(".item-meta > .sand-pile");
+    if (item.status === "completed" && item.allocations?.length > 1) {
+      if (!metrics) metrics = el("span", "session-metrics");
+      metrics.append(sand(item.effort));
+    }
     card.querySelector(".item-meta")?.remove();
     if (metrics) { card.classList.add("has-session-metrics"); card.append(metrics); }
     card.append(el("span", "day-calendar-range", `${clock(item.start)}–${clock(item.end)}`));
@@ -1011,6 +1019,29 @@ function extendable(s) {
         state.last_completed?.id === s.id))
   );
 }
+function renderTimerTaskPills(active, fallback) {
+  const list = $("timer-tasks");
+  const tasks = active ? (active.live_tasks || []).map(t => ({...t,
+    qualified: t.qualified || (t.current && active.status === "running" && t.seconds + Math.max(0, (now() - Date.parse(state.now)) / 1000) >= 30)
+  })) : [{label: fallback || "Open focus"}];
+  const signature = JSON.stringify([active?.id, tasks, busy]);
+  if (list.dataset.signature === signature) return;
+  list.dataset.signature = signature;
+  list.replaceChildren();
+  for (const task of tasks) {
+    const pill = el("span", `allocation-chip timer-task-pill${task.current ? " current" : ""}${active && !task.qualified ? " pending" : ""}`);
+    pill.append(el("span", "pill-label", task.label));
+    if (active) {
+      pill.title = task.qualified ? (task.current ? "Current task · included in this pomo" : "Included in this pomo") : "Current task · included after 30 seconds";
+      if (task.current) pill.append(el("span", "pill-status", task.qualified ? "Now" : "<30s"));
+      const remove = button("×", "pill-remove", () => timerAction("remove_topic", {key: task.key}), `Remove ${task.label} from this pomo`);
+      remove.disabled = busy;
+      pill.append(remove);
+    }
+    list.append(pill);
+  }
+  if (!tasks.length) list.append(el("span", "small muted", "No tasks included"));
+}
 function renderFocusControls() {
   const select = $("timer-topic");
   const choice = state.active?.kind === "focus" ? state.active.topic_choice || "" : nextTopicChoice;
@@ -1027,6 +1058,7 @@ function renderFocusControls() {
 $("timer-topic").onchange = () => {
   if (state.active?.kind === "focus") timerAction("set_topic", {topic: $("timer-topic").value});
   else nextTopicChoice = $("timer-topic").value;
+  $("timer-topic-control").open = false;
 };
 for (const id of ["auto-focus", "auto-break"]) $(id).onchange = () => {
   autoRetryAt = 0;
@@ -1059,7 +1091,8 @@ function tick() {
   const a = state.active, block = currentBlock();
   const resting = !a && !block && Date.parse(state.break_until) > now();
   const waitingBreak = !a && !block && !resting ? state.pending_break : null;
-  $("timer-topic").hidden = !!block || resting || !!waitingBreak || (a?.kind === "meeting" || a?.planning);
+  $("timer-topic-control").hidden = !!block || resting || !!waitingBreak || (a?.kind === "meeting" || a?.planning);
+  $("timer-topic").hidden = $("timer-topic-control").hidden;
   $("timer-topic").disabled = busy;
   for (const id of ["auto-focus", "auto-break"]) $(id).disabled = busy;
   $("timer-skip-break").hidden = !waitingBreak;
@@ -1119,7 +1152,11 @@ function tick() {
   $("timer-seconds").textContent = `:${secondPart}`;
   $("timer-mode").textContent = mode;
   updateFavicon(mode);
+  const showTaskPills = !$("timer-topic-control").hidden;
+  $("timer-task").hidden = showTaskPills;
   $("timer-task").textContent = task;
+  $("timer-tasks").hidden = !showTaskPills;
+  if (showTaskPills) renderTimerTaskPills(a, task);
   $("timer-main").textContent = label;
   $("timer-main").disabled =
     busy || waiting ||
