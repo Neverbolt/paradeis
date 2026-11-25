@@ -1020,20 +1020,22 @@ fs.mkdirSync("test-results", { recursive: true });
     await page.locator('#overview-export-dialog [data-close]').click();
     await page.evaluate(async()=>{
       await showView(false); await changeDay(state.today);
-      const session=state.day.sessions.find(s=>s.status==='completed'&&s.kind==='focus');
-      if(session) await api(`sessions/${session.id}/review/`,{allocations:[{label:'Implementation plans',sand:3},{label:'Handover and follow-up',sand:1}],focus_score:2,reflection:'Ready to share'});
-      await refresh();
+      const sample={id:999999,type:'session',status:'completed',kind:'focus',title:'Implementation plans + Handover and follow-up',
+        allocations:[{label:'Implementation plans',sand:3},{label:'Handover and follow-up',sand:1}],
+        effort:4,focus_score:2,elapsed:1500,reflection:'Ready to share'};
+      const card=timelineCard(sample);card.id='pills-visual-fixture';
+      $('timeline').prepend(card);
     });
-    const multiCard=page.locator('#timeline .timeline-item').filter({has:page.locator('.allocation-chips')}).first();
-    if(await multiCard.count()) {
-      assert.equal(await multiCard.locator(':scope > p').count(),0);
-      assert.equal(await multiCard.locator('.allocation-chip').count(),2);
-      await multiCard.scrollIntoViewIfNeeded();
-      await page.screenshot({path:'test-results/task-pills-timeline.png'});
-      await page.setViewportSize({width:390,height:844});
-      await multiCard.scrollIntoViewIfNeeded();
-      await page.screenshot({path:'test-results/task-pills-mobile.png'});
-    }
+    const multiCard=page.locator('#pills-visual-fixture');
+    assert.equal(await multiCard.locator(':scope > p').count(),0);
+    assert.equal(await multiCard.locator('.allocation-chip').count(),2);
+    assert.equal(await multiCard.locator('.item-meta .sand-pile').count(),0);
+    await multiCard.scrollIntoViewIfNeeded();
+    await page.screenshot({path:'test-results/task-pills-timeline.png'});
+    await page.setViewportSize({width:390,height:844});
+    await multiCard.scrollIntoViewIfNeeded();
+    assert(await multiCard.evaluate(el=>el.scrollWidth<=el.clientWidth),'Task pills fit the mobile card');
+    await page.screenshot({path:'test-results/task-pills-mobile.png'});
 
     assert.deepEqual(errors, [], "No browser JavaScript errors");
     console.log(
