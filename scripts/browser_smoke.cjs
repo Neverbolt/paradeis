@@ -761,6 +761,10 @@ fs.mkdirSync("test-results", { recursive: true });
       await page.reload();
       await waitFor(() => !!state?.active && !busy);
       assert.equal(await page.locator('#timer-tasks .pill-remove').count(), 0);
+      // Reload intentionally reopens the outstanding daily-review reminder.
+      await page.waitForSelector('#period-review-dialog[open]');
+      await page.locator('#period-review-skip').click();
+      await page.waitForSelector('#period-review-dialog[open]', {state:'hidden'});
       await page.locator('#timer-topic-control summary').click();
       await page.locator('#timer-topic').selectOption('open');
       await waitFor(() => !busy && state.active?.title === 'Open focus');
