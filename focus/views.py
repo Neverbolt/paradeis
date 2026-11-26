@@ -22,6 +22,7 @@ from .recurrence import freeze_elapsed, materialize, rebuild_future, validate_te
 from .services import (
     Conflict,
     daily_tasks,
+    activate_work_task,
     get_day_hours,
     workday_bounds,
     block_bounds,
@@ -76,6 +77,8 @@ def api(methods):
                     freeze_elapsed(request.user, prefs, today)
                     materialize(request.user, today, today + timedelta(days=1), today)
                     active = settle(request.user, prefs, now)
+                    activate_work_task(request.user, prefs, now, active)
+                    track_top_task(active, now)
                     planning.ensure_reservations(request.user, prefs, now)
                     reviews.ensure_daily(request.user, prefs, now)
                     return fn(request, data, prefs, now, active, *args, **kwargs)
@@ -277,13 +280,12 @@ def state(request, data, prefs, now, active):
         .order_by("-ended_at")
         .first()
     )
-    work = work_at(request.user, prefs, now)
     first_task = daily_tasks(request.user, prefs, now).filter(done=False).first()
     waiting_break = pending_break(request.user, prefs, now)
     return JsonResponse(
         {
             "now": now.isoformat(),
-            "default_topic": work.title if work else first_task.title if first_task else "Open focus",
+            "default_topic": first_task.title if first_task else "Open focus",
             "can_auto_start": can_auto_start(request.user, prefs, now, active),
             "pending_break": serialize_session(waiting_break, now) if waiting_break else None,
             "today": local_day(prefs, now).isoformat(),

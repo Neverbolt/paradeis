@@ -150,6 +150,7 @@ class Block(models.Model):
     title = models.CharField(max_length=200)
     goal_plan = models.OneToOneField(PeriodGoal, null=True, blank=True, on_delete=models.SET_NULL, related_name="reservation")
     planning_auto = models.BooleanField(default=False)
+    work_task_activated = models.BooleanField(default=False)
     template = models.ForeignKey(BlockTemplate, null=True, blank=True, on_delete=models.SET_NULL)
     occurrence_date = models.DateField(null=True, blank=True)
     fixed = models.BooleanField(default=True)
