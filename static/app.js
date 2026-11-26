@@ -21,7 +21,7 @@ let calendarAnchor,
 const taskDrafts = new Map();
 const noteReads = new Map();
 let completionTitle = "";
-let nextTopicChoice = "", autoStarting = false, autoRetryAt = 0;
+let autoStarting = false, autoRetryAt = 0;
 function titleMode() {
   return localStorage.getItem("tab-title-mode") === "completion" ? "completion" : "countdown";
 }
@@ -598,10 +598,10 @@ function timelineCard(item) {
       const metrics = el("span", "session-metrics");
       card.classList.add("has-session-metrics", "has-focus-lenses");
       metrics.append(lenses(item.focus_score));
-      if (!(item.allocations?.length > 1)) metrics.append(sand(item.effort));
+      metrics.append(sand(item.effort));
       meta.append(metrics);
     } else {
-      if (!(item.allocations?.length > 1)) meta.append(sand(item.effort));
+      meta.append(sand(item.effort));
       if (item.kind === "focus" && item.focus_score === 0) card.title = "Focus: 0 out of 3";
     }
   }
@@ -807,11 +807,7 @@ function renderDayCalendar(container, day) {
       card.querySelector(".allocation-chips").remove();
       card.prepend(el("p", "", (item.allocations || []).map(a => a.label).join(" · ")));
     }
-    let metrics = card.querySelector(".session-metrics") || card.querySelector(".item-meta > .sand-pile");
-    if (item.status === "completed" && item.allocations?.length > 1) {
-      if (!metrics) metrics = el("span", "session-metrics");
-      metrics.append(sand(item.effort));
-    }
+    const metrics = card.querySelector(".session-metrics") || card.querySelector(".item-meta > .sand-pile");
     card.querySelector(".item-meta")?.remove();
     if (metrics) { card.classList.add("has-session-metrics"); card.append(metrics); }
     card.append(el("span", "day-calendar-range", `${clock(item.start)}–${clock(item.end)}`));
@@ -1043,23 +1039,9 @@ function renderTimerTaskPills(active, fallback) {
   if (!tasks.length) list.append(el("span", "small muted", "No tasks included"));
 }
 function renderFocusControls() {
-  const select = $("timer-topic");
-  const choice = state.active?.kind === "focus" ? state.active.topic_choice || "" : nextTopicChoice;
-  select.replaceChildren();
-  const add = (value, label) => {const option = el("option", "", label); option.value = value; select.append(option);};
-  add("", `Default · ${state.active?.topic_default || state.default_topic || "Open focus"}`);
-  for (const task of state.tasks.filter(t => !t.done)) add(String(task.id), task.title);
-  add("open", "Open focus");
-  select.value = choice;
-  if (select.selectedIndex < 0) {select.value = ""; nextTopicChoice = "";}
   $("auto-focus").checked = !!state.preferences.auto_focus;
   $("auto-break").checked = !!state.preferences.auto_break;
 }
-$("timer-topic").onchange = () => {
-  if (state.active?.kind === "focus") timerAction("set_topic", {topic: $("timer-topic").value});
-  else nextTopicChoice = $("timer-topic").value;
-  $("timer-topic-control").open = false;
-};
 for (const id of ["auto-focus", "auto-break"]) $(id).onchange = () => {
   autoRetryAt = 0;
   mutate("timer/", {action: "configure_auto", auto_focus: $("auto-focus").checked,
@@ -1091,9 +1073,6 @@ function tick() {
   const a = state.active, block = currentBlock();
   const resting = !a && !block && Date.parse(state.break_until) > now();
   const waitingBreak = !a && !block && !resting ? state.pending_break : null;
-  $("timer-topic-control").hidden = !!block || resting || !!waitingBreak || (a?.kind === "meeting" || a?.planning);
-  $("timer-topic").hidden = $("timer-topic-control").hidden;
-  $("timer-topic").disabled = busy;
   for (const id of ["auto-focus", "auto-break"]) $(id).disabled = busy;
   $("timer-skip-break").hidden = !waitingBreak;
   $("timer-skip-break").disabled = busy;
@@ -1131,8 +1110,7 @@ function tick() {
   } else {
     seconds = nextSeconds();
     mode = "Focus";
-    task = nextTopicChoice === "open" ? "Open focus" :
-      state.tasks.find(t => String(t.id) === nextTopicChoice)?.title || state.default_topic || "";
+    task = state.default_topic || "Open focus";
     label = "Start";
   }
   const waiting = !a && !block && !resting && !waitingBreak && seconds < 1 &&
@@ -1152,7 +1130,7 @@ function tick() {
   $("timer-seconds").textContent = `:${secondPart}`;
   $("timer-mode").textContent = mode;
   updateFavicon(mode);
-  const showTaskPills = !$("timer-topic-control").hidden;
+  const showTaskPills = !block && !resting && !waitingBreak && !(a?.kind === "meeting" || a?.planning);
   $("timer-task").hidden = showTaskPills;
   $("timer-task").textContent = task;
   $("timer-tasks").hidden = !showTaskPills;
@@ -1237,14 +1215,12 @@ $("timer-main").onclick = () => {
   else if (state.pending_break) timerAction("start_break");
   else {
     askNotificationPermission();
-    timerAction("start", {topic: nextTopicChoice});
-    nextTopicChoice = "";
+    timerAction("start");
   }
 };
 $("timer-ignore-break").onclick = () => {
   askNotificationPermission();
-  timerAction("start", { ignore_break: true, topic: nextTopicChoice });
-  nextTopicChoice = "";
+  timerAction("start", { ignore_break: true });
 };
 $("timer-finish").onclick = () => timerAction("finish");
 $("timer-cancel").onclick = () => timerAction("cancel");

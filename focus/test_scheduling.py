@@ -134,6 +134,42 @@ class SchedulingTests(TestCase):
         session.refresh_from_db()
         self.assertEqual(session.elapsed_seconds, 240)
 
+    def test_work_promotes_existing_task_only_once_and_queue_remains_in_control(self):
+        match = Task.objects.create(user=self.user, goal_date=NOW.date(), title=" strategy ", position=5)
+        self.reserve("work", "09:00", "11:00", minutes=0, title="Strategy")
+        state = self.state()
+        self.assertEqual(state["tasks"][0]["id"], match.id)
+        self.assertEqual(Task.objects.filter(user=self.user).count(), 2)
+        session = self.start()
+        self.assertEqual(session.topic_mode, "queue")
+        self.post(f"/api/tasks/{self.task.id}/", {"action":"first"}, 1)
+        self.assertEqual(self.state(2)["default_topic"], "Inbox")
+        self.post("/api/timer/", {"action":"finish", "id":session.id}, 3)
+        self.assertEqual(list(session.allocations.values_list("task_id",flat=True)),[match.id,self.task.id])
+
+    def test_work_start_creates_task_and_switches_running_focus(self):
+        session = self.start()
+        self.reserve("work", "09:05", "10:00", minutes=0, title="Strategy")
+        self.assertFalse(Task.objects.filter(title="Strategy").exists())
+        state = self.state(5)
+        task = Task.objects.get(user=self.user,title="Strategy")
+        self.assertEqual(state["tasks"][0]["id"],task.id)
+        self.assertEqual(session.task_spans.get(ended_at__isnull=True).task_id,task.id)
+        self.state(6)
+        self.assertEqual(Task.objects.filter(user=self.user,title="Strategy").count(),1)
+        self.post("/api/timer/", {"action":"finish","id":session.id},7)
+        self.assertEqual(list(session.allocations.values_list("label",flat=True)),["Inbox","Strategy"])
+
+    def test_work_reopens_completed_match_but_not_another_days_task(self):
+        self.task.done=True;self.task.completed_on=NOW.date();self.task.save()
+        Task.objects.create(user=self.user, goal_date=NOW.date()-timedelta(days=1), title="Inbox")
+        self.reserve("work", "09:00", "10:00", minutes=0, title="Inbox")
+        self.state()
+        self.task.refresh_from_db()
+        self.assertFalse(self.task.done)
+        self.assertIsNone(self.task.completed_on)
+        self.assertEqual(Task.objects.filter(user=self.user,goal_date=NOW.date()).count(),1)
+
     def test_selected_topic_on_start_is_owned_and_work_remains_flexible(self):
         self.reserve("work", "09:00", "11:00", minutes=0, title="Strategy")
         session = self.start(topic=str(self.task.id))

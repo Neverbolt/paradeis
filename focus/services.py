@@ -77,6 +77,23 @@ def work_at(user, prefs, now):
     return None
 
 
+def activate_work_task(user, prefs, now, active=None):
+    """Promote a Work reservation into today's queue once, when first observed active."""
+    block = work_at(user, prefs, now)
+    if not block or not Block.objects.filter(pk=block.pk, work_task_activated=False).update(work_task_activated=True):
+        return
+    from django.db.models import F
+    tasks = daily_tasks(user, prefs, now)
+    name = block.title.strip()
+    task = next((task for task in tasks.order_by("done", "position", "id") if task.title.strip().casefold() == name.casefold()), None)
+    if task is None:
+        task = Task.objects.create(user=user, goal_date=local_day(prefs, now), title=name)
+    tasks.exclude(pk=task.pk).update(position=F("position") + 1)
+    task.position, task.done, task.completed_on = 0, False, None
+    task.save(update_fields=["position", "done", "completed_on"])
+    track_top_task(active, now)
+
+
 def daily_tasks(user, prefs, now):
     return Task.objects.filter(user=user, goal_date=local_day(prefs, now), archived=False)
 
@@ -108,9 +125,7 @@ def choose_topic(session, prefs, now, topic=None):
                                                 done=False, archived=False, goal_date=local_day(prefs, now))
         session.topic_mode = "task"
     else:
-        work = work_at(session.user, prefs, now)
-        session.topic_mode = "work" if work else "queue"
-        session.work_topic = work.title if work else ""
+        session.topic_mode = "queue"
     session.title = session_topic(session)[1]
 
 
@@ -261,6 +276,7 @@ def next_focus(user, prefs, now, ignore_break=False):
 def start_session(user, prefs, now, block_id=None, ignore_break=False, topic=None, auto=False):
     if Session.objects.filter(user=user, status__in=["running", "paused"]).exists():
         raise Conflict("A timer is already active. Refresh to see it.")
+    activate_work_task(user, prefs, now)
     task = daily_tasks(user, prefs, now).filter(done=False).first()
     block = None
     kind, title = "focus", task.title if task else "Open focus"

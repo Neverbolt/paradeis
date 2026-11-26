@@ -208,7 +208,7 @@ async function checkPlanningTimerUI(w) {
   const active={id:987124,kind:'focus',planning:true,title:'Weekly planning',status:'running',start,end,
     remaining:1500,elapsed:0,allocations:[],can_overrun:false};
   overrideState=()=>({...original,now:new Date().toISOString(),active,live_block:block,next_block:block});
-  await w.refresh();assert.equal($('timer-main').textContent,'Finish');assert.equal($('timer-topic').hidden,true);
+  await w.refresh();assert.equal($('timer-main').textContent,'Finish');assert.equal($('timer-tasks').hidden,true);
   boundaryStart=undefined;$('timer-main').click();
   await waitFor(()=>boundaryStart?.action==='finish'&&!w.eval('busy'),'planning timer finishes instead of pausing');
   overrideState=undefined;boundaryStart=undefined;await w.refresh();
@@ -329,7 +329,7 @@ async function checkFocusRatingsUI(w) {
   if (saved.allocations.length > 1) {
     assert.equal(card.querySelector(':scope > p'), null);
     assert.equal(card.querySelectorAll('.allocation-chip').length, saved.allocations.length);
-    assert.equal(icons.parentElement.querySelector('.sand-pile'), null);
+    assert(icons.parentElement.querySelector('.sand-pile'));
   } else assert.equal(icons.parentElement.lastElementChild.className, 'sand-pile');
   w.openReview(saved);
   assert.equal($("focus-control").querySelectorAll('[aria-pressed="true"]').length, 3);
@@ -454,7 +454,7 @@ async function checkSchedulingUI(w) {
     await w.api("blocks/", {kind: "work", title: "Strategy", date: w.localDate(workStart),
       start: w.clock(workStart), end: w.clock(workEnd)});
     await w.refresh();
-    assert.equal($("timer-task").textContent, "Strategy", JSON.stringify(w.eval("({topic: nextTopicChoice, default: state.default_topic, active: state.active, now: state.now, preferences: state.preferences})")));
+    assert.equal($("timer-task").textContent, "Strategy", JSON.stringify(w.eval("({default: state.default_topic, active: state.active, now: state.now, preferences: state.preferences})")));
     assert($("timeline").querySelector(".work-reservation"));
     assert(!$("timeline").querySelector(".reserved.work"));
     assert(w.document.querySelector('#block-kind option[value="work"]'));
